@@ -156,6 +156,35 @@ class SpacecraftState(BaseModel):
     in_contact: bool
 
 
+class OrbitSample(BaseModel):
+    sampled_at: datetime
+    latitude: float
+    longitude: float
+    altitude_km: float
+    elevation_deg: float
+    visible: bool
+
+
+class ContactWindow(BaseModel):
+    aos: datetime
+    los: datetime
+    max_elevation_at: datetime
+    max_elevation_deg: float
+
+
+class OrbitTrack(BaseModel):
+    generated_at: datetime
+    satellite_name: str
+    ground_station_name: str
+    minimum_elevation_deg: float
+    visibility_radius_m: float
+    contact_mode: Literal["geometric", "deterministic"]
+    current: OrbitSample
+    history: list[OrbitSample]
+    forecast: list[OrbitSample]
+    contact_windows: list[ContactWindow]
+
+
 class TelemetryEvent(BaseModel):
     id: str = Field(default_factory=lambda: new_id("event"))
     run_id: str

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sgp4.api import Satrec, jday
 
-from sat_simulation.common.models import ScenarioConfig, SpacecraftState
+from sat_simulation.common.models import (
+    ContactWindow,
+    OrbitSample,
+    OrbitTrack,
+    ScenarioConfig,
+    SpacecraftState,
+)
 
 EARTH_RADIUS_KM = 6378.137
 
@@ -23,9 +29,8 @@ def _gmst(datetime_utc: datetime) -> float:
     return math.radians((280.46061837 + 360.98564736629 * days) % 360)
 
 
-def propagate(config: ScenarioConfig, sampled_at: datetime) -> tuple[float, float, float]:
+def _propagate_satellite(satellite: Satrec, sampled_at: datetime) -> tuple[float, float, float]:
     sampled_at = sampled_at.astimezone(UTC)
-    satellite = Satrec.twoline2rv(config.tle_line1, config.tle_line2)
     jd, fraction = jday(
         sampled_at.year,
         sampled_at.month,
@@ -45,6 +50,11 @@ def propagate(config: ScenarioConfig, sampled_at: datetime) -> tuple[float, floa
     latitude = math.degrees(math.asin(z / radius))
     longitude = math.degrees(math.atan2(y, x))
     return latitude, longitude, radius - EARTH_RADIUS_KM
+
+
+def propagate(config: ScenarioConfig, sampled_at: datetime) -> tuple[float, float, float]:
+    satellite = Satrec.twoline2rv(config.tle_line1, config.tle_line2)
+    return _propagate_satellite(satellite, sampled_at)
 
 
 def _ecef(latitude: float, longitude: float, radius_km: float) -> tuple[float, float, float]:
@@ -72,6 +82,107 @@ def elevation_deg(
     line_norm = math.sqrt(sum(value * value for value in line))
     sin_elevation = sum(line[i] * station[i] for i in range(3)) / (line_norm * zenith_norm)
     return math.degrees(math.asin(max(-1, min(1, sin_elevation))))
+
+
+def visibility_radius_m(altitude_km: float, minimum_elevation_deg: float = 5) -> float:
+    elevation = math.radians(minimum_elevation_deg)
+    orbital_radius = EARTH_RADIUS_KM + altitude_km
+    central_angle = math.acos(EARTH_RADIUS_KM / orbital_radius * math.cos(elevation)) - elevation
+    return EARTH_RADIUS_KM * central_angle * 1000
+
+
+def orbit_track(
+    config: ScenarioConfig,
+    center: datetime,
+    *,
+    history_minutes: int = 20,
+    forecast_minutes: int = 80,
+    pass_horizon_minutes: int = 24 * 60,
+    step_seconds: int = 30,
+    minimum_elevation_deg: float = 5,
+) -> OrbitTrack:
+    """Build a deterministic SGP4 ground track and geometric contact forecast."""
+    satellite = Satrec.twoline2rv(config.tle_line1, config.tle_line2)
+
+    def sample(sampled_at: datetime) -> OrbitSample:
+        latitude, longitude, altitude = _propagate_satellite(satellite, sampled_at)
+        elevation = elevation_deg(
+            latitude,
+            longitude,
+            altitude,
+            config.ground_station_latitude,
+            config.ground_station_longitude,
+            config.ground_station_altitude_m,
+        )
+        return OrbitSample(
+            sampled_at=sampled_at,
+            latitude=latitude,
+            longitude=longitude,
+            altitude_km=altitude,
+            elevation_deg=elevation,
+            visible=elevation >= minimum_elevation_deg,
+        )
+
+    center = center.astimezone(UTC)
+    history = [
+        sample(center - timedelta(seconds=offset))
+        for offset in range(history_minutes * 60, 0, -step_seconds)
+    ]
+    current = sample(center)
+    forecast = [
+        sample(center + timedelta(seconds=offset))
+        for offset in range(step_seconds, forecast_minutes * 60 + 1, step_seconds)
+    ]
+
+    windows: list[ContactWindow] = []
+    scan_start = center - timedelta(minutes=history_minutes)
+    scan_end = center + timedelta(minutes=pass_horizon_minutes)
+    active_start: datetime | None = None
+    maximum: OrbitSample | None = None
+    sampled_at = scan_start
+    while sampled_at <= scan_end:
+        value = sample(sampled_at)
+        if value.visible:
+            if active_start is None:
+                active_start = sampled_at
+                maximum = value
+            elif maximum is None or value.elevation_deg > maximum.elevation_deg:
+                maximum = value
+        elif active_start is not None and maximum is not None:
+            windows.append(
+                ContactWindow(
+                    aos=active_start,
+                    los=sampled_at,
+                    max_elevation_at=maximum.sampled_at,
+                    max_elevation_deg=maximum.elevation_deg,
+                )
+            )
+            active_start = None
+            maximum = None
+        sampled_at += timedelta(seconds=step_seconds)
+    if active_start is not None and maximum is not None:
+        windows.append(
+            ContactWindow(
+                aos=active_start,
+                los=scan_end,
+                max_elevation_at=maximum.sampled_at,
+                max_elevation_deg=maximum.elevation_deg,
+            )
+        )
+
+    relevant_windows = [window for window in windows if window.los >= center][:3]
+    return OrbitTrack(
+        generated_at=center,
+        satellite_name=config.satellite_name,
+        ground_station_name=config.ground_station_name,
+        minimum_elevation_deg=minimum_elevation_deg,
+        visibility_radius_m=visibility_radius_m(current.altitude_km, minimum_elevation_deg),
+        contact_mode="deterministic" if config.deterministic_contact else "geometric",
+        current=current,
+        history=history,
+        forecast=forecast,
+        contact_windows=relevant_windows,
+    )
 
 
 def target_attitude(

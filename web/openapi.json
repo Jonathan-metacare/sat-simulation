@@ -159,6 +159,43 @@
         }
       }
     },
+    "/api/scenarios/{scenario_id}/orbit": {
+      "get": {
+        "summary": "Get Scenario Orbit",
+        "operationId": "get_scenario_orbit_api_scenarios__scenario_id__orbit_get",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/scenarios/{scenario_id}/control": {
       "post": {
         "summary": "Control Scenario",

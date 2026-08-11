@@ -49,7 +49,7 @@ cd web && pnpm install && cd ..
 
 ```bash
 SAT_SIM_DATA_DIR=runtime-data/gpu uv run uvicorn sat_simulation.services.gpu:app --port 8002
-SAT_SIM_DATA_DIR=runtime-data/ground uv run uvicorn sat_simulation.services.ground:app --port 8000
+SAT_SIM_DATA_DIR=runtime-data/ground SAT_SIM_DATABASE_URL=sqlite+aiosqlite:///./runtime-data/ground.db uv run uvicorn sat_simulation.services.ground:app --port 8000
 SAT_SIM_DATA_DIR=runtime-data/platform uv run uvicorn sat_simulation.services.platform:app --port 8001
 cd web && pnpm dev
 ```

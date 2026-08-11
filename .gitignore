@@ -11,6 +11,7 @@ build/
 *.egg-info/
 node_modules/
 .next/
+.next-dev/
 *.tsbuildinfo
 .playwright-cli/
 web/public/cesium/

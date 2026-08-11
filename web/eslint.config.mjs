@@ -6,7 +6,7 @@ const compat = new FlatCompat({ baseDirectory: dirname(fileURLToPath(import.meta
 
 const config = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
-  { ignores: [".next/**", "public/cesium/**"] },
+  { ignores: [".next/**", ".next-dev/**", "public/cesium/**"] },
   {
     files: ["next-env.d.ts"],
     rules: { "@typescript-eslint/triple-slash-reference": "off" }

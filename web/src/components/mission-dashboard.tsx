@@ -11,7 +11,7 @@ import {
 import { api, artifactURL } from "~/lib/api";
 import { useDashboardStore } from "~/lib/store";
 import type {
-  MissionStatus, ProductManifest, PublicConfig
+  MissionStatus, OrbitTrack, ProductManifest, PublicConfig
 } from "~/lib/types";
 import { OrbitGlobe } from "./orbit-globe";
 import { SystemTopology } from "./system-topology";
@@ -51,6 +51,7 @@ function Button({ children, onClick, active, disabled, danger }: {
 export function MissionDashboard() {
   const { scenario, mission, setScenario, setMission } = useDashboardStore();
   const [config, setConfig] = useState<PublicConfig>();
+  const [orbit, setOrbit] = useState<OrbitTrack>();
   const [faults, setFaults] = useState<Array<{ id: string; link: string; drop_rate: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -64,6 +65,8 @@ export function MissionDashboard() {
       setConfig(publicConfig);
       const activeScenario = scenarioRows[0] ?? await api.createScenario();
       setScenario(activeScenario);
+      try { setOrbit(await api.orbit(activeScenario.config.id)); }
+      catch { setOrbit(undefined); }
       // The dashboard has no historical mission selector in V1, so always follow
       // the newest mission. Using the captured mission here could overwrite a
       // just-created mission with the previously completed one.
@@ -77,6 +80,13 @@ export function MissionDashboard() {
   }, [mission?.command.id, setMission, setScenario]);
 
   useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    if (!scenario) return;
+    const timer = window.setInterval(async () => {
+      try { setOrbit(await api.orbit(scenario.config.id)); } catch { /* next refresh retries */ }
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [scenario]);
   useEffect(() => {
     if (!mission || ["completed", "failed"].includes(mission.status)) return;
     const timer = window.setInterval(async () => {
@@ -130,10 +140,23 @@ export function MissionDashboard() {
 
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
-      <section className="mb-4 grid gap-4 xl:grid-cols-[1.55fr_1fr]">
-        <div className="panel overflow-hidden rounded-2xl">
-          <PanelHeader icon={<Orbit size={16} />} title="轨道与地面站可见性" note="TLE SNAPSHOT · SGP4" />
-          <OrbitGlobe satelliteLatitude={Number(spacecraft?.latitude ?? 32)} satelliteLongitude={Number(spacecraft?.longitude ?? 112)} />
+      <section className="mb-4 grid items-start gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,1fr)]">
+        <div className="panel min-w-0 overflow-hidden rounded-2xl">
+          <PanelHeader icon={<Orbit size={16} />} title="轨道态势与过站窗口" note="TLE SNAPSHOT · SGP4" />
+          <OrbitGlobe
+            track={orbit}
+            station={{
+              name: scenario?.config.ground_station_name ?? "GS-DEMO-BEIJING",
+              latitude: scenario?.config.ground_station_latitude ?? 39.9042,
+              longitude: scenario?.config.ground_station_longitude ?? 116.4074,
+              altitudeM: scenario?.config.ground_station_altitude_m ?? 50,
+            }}
+            target={mission ? {
+              name: mission.command.target_name,
+              latitude: mission.command.target_latitude,
+              longitude: mission.command.target_longitude,
+            } : undefined}
+          />
         </div>
         <div className="space-y-4">
           <div className="panel rounded-2xl p-4">

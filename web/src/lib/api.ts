@@ -1,4 +1,4 @@
-import type { MissionDetail, MissionSummary, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
+import type { MissionDetail, MissionSummary, OrbitTrack, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
 
@@ -11,6 +11,7 @@ async function request<T>(path:string, init?:RequestInit):Promise<T> {
 export const api = {
   config:()=>request<PublicConfig>("/config"),
   scenarios:()=>request<ScenarioRecord[]>("/scenarios"),
+  orbit:(scenarioId:string)=>request<OrbitTrack>(`/scenarios/${scenarioId}/orbit`),
   createScenario:()=>request<ScenarioRecord>("/scenarios",{method:"POST",body:JSON.stringify({name:"北京光学任务演示",clock_rate:10})}),
   control:(id:string,action:string,rate?:number)=>request<{clock:ScenarioRecord["clock"]}>(`/scenarios/${id}/control`,{method:"POST",body:JSON.stringify({action,rate})}),
   missions:()=>request<MissionSummary[]>("/missions"),
@@ -22,4 +23,3 @@ export const api = {
   deleteFault:(scenarioId:string,faultId:string)=>request<void>(`/scenarios/${scenarioId}/faults/${faultId}`,{method:"DELETE"})
 };
 export function artifactURL(productId:string){return `${API_BASE}/artifacts/${productId}`;}
-

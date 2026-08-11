@@ -33,6 +33,7 @@ from sat_simulation.common.models import (
     default_link_profiles,
     utc_now,
 )
+from sat_simulation.common.orbit import orbit_track
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
 from sat_simulation.config import Settings, settings
@@ -272,6 +273,15 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     @app.get("/api/scenarios")
     async def list_scenarios() -> list[dict[str, Any]]:
         return await state.repo.list_scenarios()
+
+    @app.get("/api/scenarios/{scenario_id}/orbit")
+    async def get_scenario_orbit(scenario_id: str):
+        stored = await state.repo.get_scenario(scenario_id)
+        if not stored:
+            raise HTTPException(404, "Scenario not found.")
+        scenario, _clock_state = stored
+        clock = await state.clock_for(scenario_id)
+        return orbit_track(scenario, clock.now())
 
     @app.post("/api/scenarios/{scenario_id}/control")
     async def control_scenario(scenario_id: str, control: ScenarioControl) -> dict[str, Any]:
