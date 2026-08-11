@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sat-simulation"
+version = "0.1.0"
+description = "Satellite onboard AI software-in-the-loop digital twin"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "aiosqlite>=0.21,<1",
+  "alembic>=1.14,<2",
+  "asyncpg>=0.30,<1",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "numpy>=2.1,<3",
+  "opencv-python-headless>=4.10,<5",
+  "pydantic-settings>=2.7,<3",
+  "pyproj>=3.7,<4",
+  "python-multipart>=0.0.20,<1",
+  "rasterio>=1.4,<2",
+  "sgp4>=2.24,<3",
+  "sqlalchemy[asyncio]>=2.0.36,<3",
+  "sse-starlette>=2.2,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sat_simulation"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --disable-warnings"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = [
+  "ASYNC240", # FastAPI file responses and startup validation use pathlib intentionally.
+  "B008",     # FastAPI dependency markers are defined in endpoint defaults by design.
+]
+
+[tool.uv]
+required-version = ">=0.9"

@@ -1,0 +1,9 @@
+.git
+.venv
+runtime-data
+web/node_modules
+web/.next
+web/public/cesium
+__pycache__
+.pytest_cache
+

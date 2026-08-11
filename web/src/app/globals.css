@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --ink: #d9f8ff;
+  --muted: #7798a8;
+  --line: rgba(109, 231, 255, 0.16);
+  --cyan: #51e5ff;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: #02080d; }
+body {
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: radial-gradient(circle at 18% 5%, rgba(0,150,190,.13), transparent 32%), radial-gradient(circle at 86% 25%, rgba(255,135,38,.07), transparent 25%), linear-gradient(180deg,#02090f,#010508 72%);
+}
+button, input, select { font: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.panel { border: 1px solid var(--line); background: linear-gradient(145deg,rgba(7,28,41,.88),rgba(2,12,20,.78)); box-shadow: inset 0 1px rgba(255,255,255,.025),0 18px 55px rgba(0,0,0,.18); backdrop-filter: blur(16px); }
+.grid-scan { background-image: linear-gradient(rgba(91,210,232,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(91,210,232,.03) 1px,transparent 1px); background-size: 28px 28px; }
+.status-pulse::before { content:""; display:inline-block; width:7px; height:7px; margin-right:7px; border-radius:999px; background:#5af5ac; box-shadow:0 0 13px #5af5ac; }
+.cesium-viewer-bottom,.cesium-viewer-toolbar { display:none!important; }
+@keyframes flow { to { stroke-dashoffset:-36; } }
+.flow-line { stroke-dasharray:7 7; animation:flow 1.5s linear infinite; }
+
