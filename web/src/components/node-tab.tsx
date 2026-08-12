@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Cpu, Database, Download, FileImage, Satellite, ScanLine, ShieldCheck } from "lucide-react";
+import { Cpu, Database, Download, FileImage, Radio, Satellite, ScanLine, ShieldCheck } from "lucide-react";
 
 import { api, nodeArtifactURL } from "~/lib/api";
 import type { MissionDetail, NodeArtifact, NodeKind, NodeSnapshot } from "~/lib/types";
@@ -15,9 +15,10 @@ const titles: Record<Exclude<NodeKind, "ground">, { title: string; subtitle: str
   gpu: { title: "GPU Payload", subtitle: "L1B 接收校验 · Provider · 模型上下文 · AI 结果" },
 };
 
-export function NodeTab({ node, mission, providerHealth }: {
+export function NodeTab({ node, mission, providerHealth, gtxLink }: {
   node: Exclude<NodeKind, "ground">; mission?: MissionDetail;
   providerHealth: Record<string, { status: string }>;
+  gtxLink?: { bandwidth_bps: number; latency_ms: number; frame_payload_bytes: number };
 }) {
   const [snapshot, setSnapshot] = useState<NodeSnapshot>();
   useEffect(() => {
@@ -34,6 +35,9 @@ export function NodeTab({ node, mission, providerHealth }: {
     item.level === "thumbnail" || item.level === "raw_quicklook"
   );
   const aiResult = snapshot?.state.result as { result?: { content?: string; provider?: string; model_version?: string } } | undefined;
+  const providerStatus = mission?.ai_mode === "llm"
+    ? providerHealth.language?.status
+    : providerHealth.detection?.status;
   return <div className="space-y-4">
     <section className="panel rounded-2xl p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -43,11 +47,30 @@ export function NodeTab({ node, mission, providerHealth }: {
       {snapshot?.observation_notice && <div className="mt-4 flex items-center gap-2 rounded-lg border border-orange-300/20 bg-orange-300/[.07] px-3 py-2 text-xs text-orange-200"><ShieldCheck size={14} />{snapshot.observation_notice}</div>}
     </section>
 
+    {node === "platform" && <section className="panel rounded-2xl p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="flex items-center gap-2 text-sm text-cyan-100"><Radio size={15} />Virtual GTX 链路</h3>
+        <span className="rounded border border-cyan-300/20 bg-cyan-300/10 px-2 py-1 text-[10px] text-cyan-200">星务平台 ↔ GPU Payload</span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <NodeMetric label="带宽" value={formatRate(gtxLink?.bandwidth_bps ?? 0)} />
+        <NodeMetric label="单向延迟" value={`${gtxLink?.latency_ms ?? 0} ms`} />
+        <NodeMetric label="帧载荷" value={`${gtxLink?.frame_payload_bytes ?? 0} B`} />
+      </div>
+    </section>}
+
+    {node === "gpu" && <section className="panel rounded-2xl p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="flex items-center gap-2 text-sm text-cyan-100"><Cpu size={15} />智能载荷 Provider</h3>
+        <span className="rounded border border-orange-300/20 bg-orange-300/10 px-2 py-1 text-[10px] text-orange-200">{providerStatus ?? "UNKNOWN"}</span>
+      </div>
+      <p className="text-xs leading-5 text-slate-500">本任务固定使用 {mission?.ai_mode?.toUpperCase() ?? "YOLO"}。未配置或健康检查失败时，第五步会停在 blocked，可修复服务后原步重试；系统不会伪造结果。</p>
+    </section>}
+
     <section className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
       <div className="panel rounded-2xl p-4">
         <h3 className="mb-4 flex items-center gap-2 text-sm text-cyan-100"><Database size={15} />节点状态</h3>
         <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-xl border border-white/[.06] bg-black/25 p-3 font-mono text-[11px] leading-5 text-slate-400">{JSON.stringify(snapshot?.state ?? { status: "尚无节点数据" }, null, 2)}</pre>
-        {node === "gpu" && <div className="mt-3 text-xs text-slate-500">Provider：{mission?.ai_mode === "llm" ? providerHealth.language?.status : providerHealth.detection?.status ?? "unknown"}</div>}
       </div>
       <div className="panel rounded-2xl p-4">
         <h3 className="mb-4 flex items-center gap-2 text-sm text-cyan-100"><FileImage size={15} />节点本地产物</h3>
@@ -58,6 +81,17 @@ export function NodeTab({ node, mission, providerHealth }: {
       </div>
     </section>
   </div>;
+}
+
+function formatRate(rate: number) {
+  if (rate >= 1e9) return `${(rate / 1e9).toFixed(1)} Gbps`;
+  if (rate >= 1e6) return `${(rate / 1e6).toFixed(0)} Mbps`;
+  if (rate >= 1e3) return `${(rate / 1e3).toFixed(0)} Kbps`;
+  return `${rate} bps`;
+}
+
+function NodeMetric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-lg border border-white/[.055] bg-black/15 px-3 py-2"><div className="text-[9px] tracking-wider text-slate-600 uppercase">{label}</div><div className="mt-1 font-mono text-xs text-slate-200">{value}</div></div>;
 }
 
 function ArtifactCard({ artifact, missionId, node }: { artifact: NodeArtifact; missionId: string; node: NodeKind }) {

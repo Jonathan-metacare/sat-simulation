@@ -202,7 +202,7 @@ function drawScene(
 
   if (setInitialCamera) {
     viewer.camera.setView({
-      destination: C.Cartesian3.fromDegrees(station.longitude, station.latitude, 8_200_000),
+      destination: C.Cartesian3.fromDegrees(station.longitude, station.latitude, 12_000_000),
     });
   }
 }
@@ -275,7 +275,7 @@ export function OrbitGlobe({ track, station, target }: OrbitGlobeProps) {
   }, [track]);
 
   return (
-    <div className="relative h-[400px] w-full overflow-hidden bg-[#02080d] sm:h-[430px] xl:h-[460px]">
+    <div className="relative h-[360px] w-full flex-1 overflow-hidden bg-[#02080d] sm:h-[390px] xl:h-auto xl:min-h-[420px]">
       <div ref={element} className="absolute inset-0" aria-label="Cesium 轨道态势视图" />
       <div className="pointer-events-none absolute left-3 top-3 grid grid-cols-2 gap-2 sm:left-4 sm:top-4">
         <MapMetric

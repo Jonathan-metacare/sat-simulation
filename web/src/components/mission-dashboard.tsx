@@ -5,8 +5,8 @@ import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Activity, ActivitySquare, AlertTriangle, Box, Clock3, Database, FileImage, Gauge,
-  LoaderCircle, Orbit, Radio, ShieldCheck, StepForward, X, Zap
+  Activity, ActivitySquare, AlertTriangle, Clock3, Database, FileImage, Gauge,
+  LoaderCircle, Orbit, Radio, StepForward, X, Zap
 } from "lucide-react";
 
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
@@ -48,7 +48,6 @@ export function MissionDashboard() {
   const { scenario, mission, setScenario, setMission } = useDashboardStore();
   const [config, setConfig] = useState<PublicConfig>();
   const [orbit, setOrbit] = useState<OrbitTrack>();
-  const [faults, setFaults] = useState<Array<{ id: string; link: string; drop_rate: number }>>([]);
   const [providerHealth, setProviderHealth] = useState<Record<string, { status: string }>>({});
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -85,7 +84,6 @@ export function MissionDashboard() {
       // just-created mission with the previously completed one.
       const activeId = missionRows[0]?.command.id ?? mission?.command.id;
       if (activeId) setMission(await api.mission(activeId));
-      setFaults(await api.faults(activeScenario.config.id));
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "加载失败");
@@ -286,8 +284,8 @@ export function MissionDashboard() {
 
       {activeTab === "ground" ? <>
 
-      <section className="mb-4 grid items-start gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,1fr)]">
-        <div className="panel min-w-0 overflow-hidden rounded-2xl">
+      <section className="mb-4 grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,1fr)]">
+        <div className="panel flex min-w-0 flex-col overflow-hidden rounded-2xl">
           <PanelHeader icon={<Orbit size={16} />} title="轨道态势与过站窗口" note="TLE SNAPSHOT · SGP4" />
           <OrbitGlobe
             track={orbit}
@@ -304,8 +302,8 @@ export function MissionDashboard() {
             } : undefined}
           />
         </div>
-        <div className="space-y-4">
-          <div className="panel rounded-2xl p-4">
+        <div className="flex flex-col gap-4">
+          <div className="panel flex-1 rounded-2xl p-4">
             <div className="mb-3 flex items-center justify-between"><Title icon={<Gauge size={16} />} text="轨姿遥测" /><span className="text-[10px] text-emerald-300">{spacecraft?.in_contact === false ? "不可见" : "窗口开放"}</span></div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <Metric label="纬度" value={`${Number(spacecraft?.latitude ?? 0).toFixed(3)}°`} />
@@ -318,48 +316,31 @@ export function MissionDashboard() {
           </div>
 
           <div className="panel rounded-2xl p-4">
-            <div className="mb-3 flex items-center justify-between"><Title icon={<ShieldCheck size={16} />} text="故障注入" orange /><span className="text-[10px] text-slate-500">SEED {scenario?.config.seed}</span></div>
-            <p className="mb-3 text-xs leading-5 text-slate-500">确定性下行故障：10% 丢帧 + 2% CRC 错误。仅影响后续任务。</p>
-            {faults.length
-              ? <Button danger onClick={() => scenario && run(() => Promise.all(faults.map((fault) => api.deleteFault(scenario.config.id, fault.id))))}><AlertTriangle size={14} />清除 {faults.length} 条故障</Button>
-              : <Button danger onClick={() => scenario && run(() => api.injectDrop(scenario.config.id))}><AlertTriangle size={14} />注入下行故障</Button>}
+            <div className="mb-4 flex items-center justify-between"><Title icon={<Radio size={16} />} text="链路状态" /><span className="text-[10px] text-slate-500">星地数传 · CRC32C + SHA-256</span></div>
+            <div className="space-y-3">
+              <LinkCard title="地面上行" rate={config?.links.uplink?.bandwidth_bps} latency={config?.links.uplink?.latency_ms} accent="orange" />
+              <LinkCard title="地面下行" rate={config?.links.downlink?.bandwidth_bps} latency={config?.links.downlink?.latency_ms} accent="cyan" />
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <Metric label="任务传输" value={String(mission?.transfers.length ?? 0)} />
+              <Metric label="重传" value={String(mission?.transfers.reduce((sum, item) => sum + item.retry_count, 0) ?? 0)} />
+              <Metric label="CRC 错误" value={String(mission?.transfers.reduce((sum, item) => sum + item.crc_failures, 0) ?? 0)} good />
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="mb-4">
-        <div className="panel rounded-2xl p-4">
-          <div className="mb-4 flex items-center justify-between"><Title icon={<Radio size={16} />} text="链路状态" /><span className="text-[10px] text-slate-500">CRC32C + SHA-256</span></div>
-          <div className="space-y-3">
-            <LinkCard title="地面上行" rate={config?.links.uplink?.bandwidth_bps} latency={config?.links.uplink?.latency_ms} accent="orange" />
-            <LinkCard title="Virtual GTX" rate={config?.links.gtx?.bandwidth_bps} latency={config?.links.gtx?.latency_ms} accent="cyan" />
-            <LinkCard title="地面下行" rate={config?.links.downlink?.bandwidth_bps} latency={config?.links.downlink?.latency_ms} accent="cyan" />
-          </div>
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <Metric label="任务传输" value={String(mission?.transfers.length ?? 0)} />
-            <Metric label="重传" value={String(mission?.transfers.reduce((sum, item) => sum + item.retry_count, 0) ?? 0)} />
-            <Metric label="CRC 错误" value={String(mission?.transfers.reduce((sum, item) => sum + item.crc_failures, 0) ?? 0)} good />
-          </div>
-        </div>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-[1.15fr_1fr]">
+      <section className="space-y-4">
         <div className="panel rounded-2xl p-4">
           <div className="mb-4 flex items-center justify-between"><Title icon={<Database size={16} />} text="光学产品链" /><span className="text-[10px] text-slate-500">RAW → L0 → L1A → L1B → STAC</span></div>
           {products.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{products.map((product) => <ProductCard key={product.id} product={product} />)}</div> : onboardProducts.length ? <div><div className="mb-3 text-[10px] tracking-wider text-orange-200">星上目录 · 尚未下传</div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{onboardProducts.map((product) => <OnboardProductCard key={product.id} product={product} />)}</div></div> : <Empty text="第六步结果包真正下传前，地面只知道星上目录状态，不可访问产品。" />}
         </div>
-        <div className="space-y-4">
-          <div className="panel overflow-hidden rounded-2xl">
-            <PanelHeader icon={<FileImage size={16} />} title="L1B 与智能分析" note="DOWNLINKED RESULT" />
-            <div className="relative flex min-h-56 items-center justify-center bg-black/25">{thumbnail ? <Image unoptimized fill sizes="(max-width: 1280px) 100vw, 40vw" src={artifactURL(thumbnail.id)} alt="L1B optical thumbnail" className="object-contain" /> : <Empty text="L1B 下传后显示缩略图。" />}</div>
-            <div className="border-t border-white/[.06] p-4">
-              <div className="mb-2 flex items-center justify-between"><span className="text-xs font-medium text-cyan-100">模型分析结果</span>{l1b && <a className="text-[10px] text-cyan-300 hover:text-cyan-100" href={artifactURL(l1b.id)} target="_blank" rel="noreferrer">下载 L1B GeoTIFF</a>}</div>
-              {analysis?.content ? <><div className="mb-3 flex flex-wrap gap-2 text-[10px] text-slate-500"><span>{analysis.provider}</span><span>{analysis.model_version ?? "unknown model"}</span>{analysis.elapsed_ms !== undefined && <span>{(analysis.elapsed_ms / 1000).toFixed(1)} s</span>}</div>{analysis.truncated && <div className="mb-3 rounded-lg border border-orange-300/25 bg-orange-300/10 px-3 py-2 text-xs text-orange-200">{analysis.reason ?? "模型输出达到长度上限，报告可能不完整。"}</div>}<div className="llm-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{analysis.content}</ReactMarkdown></div></> : <Empty text={mission?.phase === "completed" ? "结果包中没有可展示的模型分析。" : "第六步结果包下传后，模型分析将在这里与 L1B 一起展示。"} />}
-            </div>
-          </div>
-          <div className="panel rounded-2xl p-4">
-            <div className="mb-3 flex items-center justify-between"><Title icon={<Box size={16} />} text="智能载荷 Provider" orange /><span className="rounded border border-orange-300/20 bg-orange-300/10 px-2 py-1 text-[10px] text-orange-200">{mission?.ai_mode === "llm" ? (providerHealth.language?.status ?? "UNKNOWN") : (providerHealth.detection?.status ?? "UNKNOWN")}</span></div>
-            <p className="text-xs leading-5 text-slate-500">本任务固定使用 {mission?.ai_mode?.toUpperCase() ?? "YOLO"}。未配置或健康检查失败时，第五步会停在 blocked，可修复服务后原步重试；系统不会伪造结果。</p>
+        <div className="panel overflow-hidden rounded-2xl">
+          <PanelHeader icon={<FileImage size={16} />} title="智能分析" note="DOWNLINKED RESULT" />
+          <div className="relative flex min-h-64 items-center justify-center bg-black/25">{thumbnail ? <Image unoptimized fill sizes="100vw" src={artifactURL(thumbnail.id)} alt="L1B optical thumbnail" className="object-contain" /> : <Empty text="L1B 下传后显示缩略图。" />}</div>
+          <div className="border-t border-white/[.06] p-4">
+            <div className="mb-2 flex items-center justify-between"><span className="text-xs font-medium text-cyan-100">模型分析结果</span>{l1b && <a className="text-[10px] text-cyan-300 hover:text-cyan-100" href={artifactURL(l1b.id)} target="_blank" rel="noreferrer">下载 L1B GeoTIFF</a>}</div>
+            {analysis?.content ? <><div className="mb-3 flex flex-wrap gap-2 text-[10px] text-slate-500"><span>{analysis.provider}</span><span>{analysis.model_version ?? "unknown model"}</span>{analysis.elapsed_ms !== undefined && <span>{(analysis.elapsed_ms / 1000).toFixed(1)} s</span>}</div>{analysis.truncated && <div className="mb-3 rounded-lg border border-orange-300/25 bg-orange-300/10 px-3 py-2 text-xs text-orange-200">{analysis.reason ?? "模型输出达到长度上限，报告可能不完整。"}</div>}<div className="llm-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{analysis.content}</ReactMarkdown></div></> : <Empty text={mission?.phase === "completed" ? "结果包中没有可展示的模型分析。" : "第六步结果包下传后，模型分析将在这里与 L1B 一起展示。"} />}
           </div>
         </div>
       </section>
@@ -380,7 +361,7 @@ export function MissionDashboard() {
           <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>取消</Button><Button onClick={createMission} active disabled={working}>{working ? "初始化中" : mission && !["completed", "cancelled"].includes(mission.execution_state) ? "结束当前任务并新建" : "初始化任务"}</Button></div>
         </div>
       </div>}
-      </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} />}
+      </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} gtxLink={config?.links.gtx} />}
     </main>
   );
 }
