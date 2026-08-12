@@ -160,6 +160,13 @@ class MissionCommand(BaseModel):
     scene_id: str = "demo-optical-scene"
     enable_ai: bool = True
     ai_mode: AIMode = AIMode.YOLO
+    project_context: str = Field(
+        default="星上智能计算数字孪生光学观测任务", max_length=4000
+    )
+    analysis_prompt: str = Field(
+        default="识别图像中的主要地物、目标和异常，说明判断依据与不确定性。",
+        max_length=2000,
+    )
     planned_windows: PlannedWindows | None = None
 
 
@@ -172,6 +179,13 @@ class MissionCreate(BaseModel):
     scene_id: str = "demo-optical-scene"
     enable_ai: bool = True
     ai_mode: AIMode = AIMode.YOLO
+    project_context: str = Field(
+        default="星上智能计算数字孪生光学观测任务", max_length=4000
+    )
+    analysis_prompt: str = Field(
+        default="识别图像中的主要地物、目标和异常，说明判断依据与不确定性。",
+        max_length=2000,
+    )
 
 
 class MissionAdvance(BaseModel):
@@ -360,7 +374,11 @@ class AnalysisResult(BaseModel):
     status: Literal["ok", "not_configured", "unavailable", "error"]
     provenance: Literal["model", "placeholder"]
     provider: str
+    model_version: str | None = None
+    elapsed_ms: float = Field(default=0, ge=0)
     content: str | None = None
+    finish_reason: str | None = None
+    truncated: bool = False
     reason: str | None = None
 
 

@@ -464,6 +464,16 @@ export interface components {
             enable_ai: boolean;
             /** @default yolo */
             ai_mode: components["schemas"]["AIMode"];
+            /**
+             * Project Context
+             * @default 星上智能计算数字孪生光学观测任务
+             */
+            project_context: string;
+            /**
+             * Analysis Prompt
+             * @default 识别图像中的主要地物、目标和异常，说明判断依据与不确定性。
+             */
+            analysis_prompt: string;
             planned_windows?: components["schemas"]["PlannedWindows"] | null;
         };
         /** MissionCreate */
@@ -502,6 +512,16 @@ export interface components {
             enable_ai: boolean;
             /** @default yolo */
             ai_mode: components["schemas"]["AIMode"];
+            /**
+             * Project Context
+             * @default 星上智能计算数字孪生光学观测任务
+             */
+            project_context: string;
+            /**
+             * Analysis Prompt
+             * @default 识别图像中的主要地物、目标和异常，说明判断依据与不确定性。
+             */
+            analysis_prompt: string;
         };
         /** MissionDetail */
         MissionDetail: {

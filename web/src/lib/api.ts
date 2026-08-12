@@ -1,4 +1,4 @@
-import type { AIMode, MissionDetail, MissionSummary, OrbitTrack, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
+import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, OrbitTrack, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
 
@@ -16,9 +16,10 @@ export const api = {
   control:(id:string,action:string,rate?:number)=>request<{clock:ScenarioRecord["clock"]}>(`/scenarios/${id}/control`,{method:"POST",body:JSON.stringify({action,rate})}),
   missions:()=>request<MissionSummary[]>("/missions"),
   mission:(id:string)=>request<MissionDetail>(`/missions/${id}`),
-  createMission:(scenarioId:string,aiMode:AIMode)=>request<MissionDetail>("/missions",{method:"POST",body:JSON.stringify({scenario_id:scenarioId,name:"自动规划光学观测",scene_id:"demo-optical-scene",ai_mode:aiMode})}),
+  createMission:(scenarioId:string,aiMode:AIMode,projectContext:string,analysisPrompt:string)=>request<MissionDetail>("/missions",{method:"POST",body:JSON.stringify({scenario_id:scenarioId,name:"自动规划光学观测",scene_id:"demo-optical-scene",ai_mode:aiMode,project_context:projectContext,analysis_prompt:analysisPrompt})}),
   advanceMission:(missionId:string,playbackSpeed:1|2|5,idempotencyKey:string)=>request<{mission_id:string;action:string}>(`/missions/${missionId}/advance`,{method:"POST",body:JSON.stringify({playback_speed:playbackSpeed,idempotency_key:idempotencyKey})}),
   cancelMission:(missionId:string)=>request<MissionDetail>(`/missions/${missionId}/cancel`,{method:"POST"}),
+  missionResult:(missionId:string)=>request<MissionResultResponse>(`/missions/${missionId}/result`),
   providerHealth:()=>request<Record<string,{status:string;api_url_configured?:boolean}>>('/providers/health'),
   transfers:(runId?:string)=>request<TransferRecord[]>(`/transfers${runId?`?run_id=${runId}`:""}`),
   faults:(scenarioId:string)=>request<Array<{id:string;link:string;drop_rate:number}>>(`/scenarios/${scenarioId}/faults`),

@@ -24,7 +24,7 @@ export function deriveTopologyFlows(mission?: TopologyMissionState) {
         : phase && phase !== "initialized"
           ? "complete"
           : "idle",
-      label: substage === "downlink" && running ? "结果请求上注" : "任务上注",
+      label: substage === "downlink" && running ? "结果请求上注 / 结果包下传" : "数传链路",
     } as { state: FlowState; label: string },
     payload: {
       state: running && ["capture", "processing"].includes(substage ?? "")
@@ -93,21 +93,25 @@ export function SystemTopology({ mission }: { mission?: TopologyMissionState }) 
   const active = mission?.activeSubstage;
   const provider = mission?.providerStatus?.toUpperCase() ?? "UNKNOWN";
 
-  return <div className="min-h-40 overflow-x-auto px-3 py-3">
-    <div className="flex min-w-[900px] items-center justify-between gap-2">
-      <Node
-        icon={<RadioTower size={22} />}
-        title="地面站"
-        state={running && ["uplink", "downlink"].includes(active ?? "") ? "GROUND ACTIVE" : "GROUND READY"}
-        active={running && ["uplink", "downlink"].includes(active ?? "")}
-      />
-      <Link label={flows.uplink.label} state={flows.uplink.state} />
-      <Node
-        icon={<Satellite size={22} />}
-        title="星务平台"
-        state={running ? `${active?.toUpperCase()} RUNNING` : "PLATFORM PAUSED"}
-        active={running}
-      />
+  return <div className="min-h-52 overflow-x-auto px-3 py-3">
+    <div className="grid min-w-[900px] grid-cols-[112px_minmax(100px,1fr)_112px_minmax(100px,1fr)_112px] grid-rows-2 items-center gap-x-2 gap-y-4">
+      <div className="row-span-2">
+        <Node
+          icon={<RadioTower size={22} />}
+          title="地面站"
+          state={running && ["uplink", "downlink"].includes(active ?? "") ? "GROUND ACTIVE" : "GROUND READY"}
+          active={running && ["uplink", "downlink"].includes(active ?? "")}
+        />
+      </div>
+      <div className="row-span-2"><Link label={flows.uplink.label} state={flows.uplink.state} reverse={active === "downlink"} /></div>
+      <div className="row-span-2">
+        <Node
+          icon={<Satellite size={22} />}
+          title="星务平台"
+          state={running ? `${active?.toUpperCase()} RUNNING` : "PLATFORM PAUSED"}
+          active={running}
+        />
+      </div>
       <Link label={flows.payload.label} state={flows.payload.state} />
       <Node
         icon={<ScanLine size={22} />}
@@ -123,10 +127,10 @@ export function SystemTopology({ mission }: { mission?: TopologyMissionState }) 
         active={running && ["gtx", "ai"].includes(active ?? "")}
       />
     </div>
-    <div className="mt-2 flex min-w-[900px] justify-between px-[8%] text-[9px] tracking-wide text-slate-600">
-      <span>静态线：已完成或待命</span>
+    <div className="mt-3 flex min-w-[900px] justify-between px-[8%] text-[9px] tracking-wide text-slate-600">
+      <span>所有载荷链路均以星务平台为中心</span>
       <span className={flows.downlink.state === "active" ? "text-cyan-200" : ""}>
-        {flows.downlink.state === "active" ? "结果请求已上注 · 结果包正在下传" : "结果下传链路待命"}
+        {flows.downlink.state === "active" ? "结果请求已上注 · 结果包正在下传" : "光学载荷与 GPU 载荷无直连"}
       </span>
     </div>
   </div>;

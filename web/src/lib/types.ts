@@ -34,7 +34,8 @@ export interface MissionCommand {
   id: string; run_id: string; scenario_id: string; name: string;
   target_name: string; target_latitude: number; target_longitude: number;
   requested_at: string; scene_id: string; enable_ai: boolean;
-  ai_mode: AIMode; planned_windows: PlannedWindows;
+  ai_mode: AIMode; project_context: string; analysis_prompt: string;
+  planned_windows: PlannedWindows;
 }
 export interface TelemetryEvent {
   id: string; run_id: string; mission_id?: string; sequence: number;
@@ -70,6 +71,16 @@ export interface MissionDetail extends MissionSummary {
   events: TelemetryEvent[]; products: ProductManifest[];
   onboard_products: ProductManifest[];
   transfers: TransferRecord[]; step_attempts: StepAttempt[];
+}
+export interface AnalysisResult {
+  status: string; provenance: string; provider: string; model_version?: string;
+  elapsed_ms?: number; content?: string; finish_reason?: string;
+  truncated?: boolean; reason?: string;
+}
+export interface MissionResultResponse {
+  mission_id: string;
+  ai_result?: { ai_mode: AIMode; l1b_sha256: string; result: AnalysisResult };
+  products: ProductManifest[];
 }
 export interface PublicConfig {
   version: string; ai: { detection: string; language: string };

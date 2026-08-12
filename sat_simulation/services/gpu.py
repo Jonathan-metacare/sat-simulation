@@ -136,6 +136,7 @@ class GPUState:
                         "thumbnail_path": job["thumbnail_path"],
                         "mission_id": mission_id,
                         "mode": mode,
+                        **dict(request.get("options") or {}),
                     },
                     [manifest],
                 )

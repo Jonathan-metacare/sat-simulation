@@ -35,6 +35,12 @@ SAT_SIM_LLM_API_URL=http://127.0.0.1:11434
 SAT_SIM_LLM_MODEL=your-vision-model
 ```
 
+For LLM missions, the creation dialog captures project/user context and the
+analysis request. The GPU derives a PNG visual preview from the verified L1B
+GeoTIFF and sends the preview, L1B manifest, mission target and that context to
+the OpenAI-compatible multimodal endpoint. Ground displays the analysis beside
+the L1B preview only after the sixth-step result package is downlinked.
+
 Optional `SAT_SIM_YOLO_API_KEY` and `SAT_SIM_LLM_API_KEY` remain server-side and
 are never written to events or the database. After changing provider settings,
 restart only GPU and retry the blocked fifth step with a new idempotency key.

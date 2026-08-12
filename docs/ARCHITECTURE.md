@@ -22,7 +22,7 @@ gtx_complete -> ai_complete -> completed`. Each advance runs exactly one phase,
 records an attempt and ends with both Ground and Platform clocks paused.
 
 RAW/L0/L1A/L1B remain on Platform. Only L1B crosses GTX. The final ground result
-package contains AI JSON, summary, manifests, STAC and thumbnail; it is created
+package contains AI JSON, L1B, summary, manifests, STAC and thumbnail; it is created
 only after a mission-ID result request in the next Beijing pass.
 
 The software intentionally does not model GTX PHY, SerDes, PCB signal integrity,

@@ -24,3 +24,26 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 @keyframes flow { to { stroke-dashoffset:-36; } }
 .flow-line { stroke-dasharray:7 7; animation:flow 1.5s linear infinite; }
 .flow-line-reverse { animation-direction:reverse; }
+.llm-markdown { color:#cbd5e1; font-size:.78rem; line-height:1.75; overflow-wrap:anywhere; }
+.llm-markdown > :first-child { margin-top:0; }
+.llm-markdown > :last-child { margin-bottom:0; }
+.llm-markdown h1,.llm-markdown h2,.llm-markdown h3,.llm-markdown h4 { color:#d9f8ff; font-weight:600; line-height:1.35; margin:1.35rem 0 .65rem; }
+.llm-markdown h1 { font-size:1.15rem; }
+.llm-markdown h2 { font-size:1.05rem; }
+.llm-markdown h3 { font-size:.95rem; }
+.llm-markdown h4 { font-size:.85rem; }
+.llm-markdown p { margin:.65rem 0; }
+.llm-markdown strong { color:#e6faff; font-weight:600; }
+.llm-markdown ul,.llm-markdown ol { margin:.65rem 0; padding-left:1.4rem; }
+.llm-markdown ul { list-style:disc; }
+.llm-markdown ol { list-style:decimal; }
+.llm-markdown li { margin:.25rem 0; padding-left:.15rem; }
+.llm-markdown blockquote { margin:.8rem 0; border-left:2px solid rgba(81,229,255,.45); background:rgba(81,229,255,.05); padding:.55rem .8rem; color:#9fc6d1; }
+.llm-markdown code { border:1px solid rgba(255,255,255,.08); border-radius:.25rem; background:rgba(0,0,0,.28); padding:.08rem .3rem; color:#91ecff; font-size:.72rem; }
+.llm-markdown pre { margin:.8rem 0; overflow-x:auto; border:1px solid rgba(255,255,255,.08); border-radius:.5rem; background:rgba(0,0,0,.35); padding:.75rem; }
+.llm-markdown pre code { border:0; background:transparent; padding:0; }
+.llm-markdown table { width:100%; margin:.8rem 0; border-collapse:collapse; font-size:.72rem; }
+.llm-markdown th,.llm-markdown td { border:1px solid rgba(255,255,255,.1); padding:.45rem .55rem; text-align:left; vertical-align:top; }
+.llm-markdown th { background:rgba(81,229,255,.08); color:#d9f8ff; }
+.llm-markdown a { color:#51e5ff; text-decoration:underline; text-underline-offset:2px; }
+.llm-markdown hr { margin:1rem 0; border:0; border-top:1px solid rgba(255,255,255,.1); }

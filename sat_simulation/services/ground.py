@@ -489,15 +489,19 @@ class GroundState:
                 return str(exc.response.json().get("detail", exc))
             except ValueError:
                 pass
-        return str(exc)
+        if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+            return "等待智能载荷响应超时；模型可能仍在 GPU 上执行，可直接重试本步"
+        return str(exc) or exc.__class__.__name__
 
     async def call_platform_stage(
         self, mission: dict[str, Any], stage: str, clock: SimulationClock
     ) -> None:
         command: MissionCommand = mission["command"]
-        async with httpx.AsyncClient(
-            timeout=max(60.0, self.settings.provider_timeout_seconds + 10)
-        ) as client:
+        stage_timeout = max(
+            300.0 if stage == "ai" else 60.0,
+            self.settings.provider_timeout_seconds + 30,
+        )
+        async with httpx.AsyncClient(timeout=stage_timeout) as client:
             response = await client.post(
                 f"{self.settings.platform_http_url}/internal/missions/{command.id}/advance",
                 json={"stage": stage, "simulated_at": clock.now().isoformat()},
@@ -702,6 +706,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             scene_id=request.scene_id,
             enable_ai=True,
             ai_mode=request.ai_mode,
+            project_context=request.project_context,
+            analysis_prompt=request.analysis_prompt,
             planned_windows=plan,
         )
         await state.repo.create_mission(command)
@@ -823,6 +829,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             in {
                 ProductLevel.RESULT_PACKAGE,
                 ProductLevel.AI_RESULT,
+                ProductLevel.L1B,
                 ProductLevel.STAC,
                 ProductLevel.THUMBNAIL,
             }

@@ -313,6 +313,18 @@ class PlatformState:
         elif stage == "ai":
             if state["phase"] not in {MissionPhase.GTX_COMPLETE, MissionPhase.AI_COMPLETE}:
                 raise HTTPException(409, "星务任务阶段不允许智能分析")
+            if "ai_result" in state:
+                state["phase"] = MissionPhase.AI_COMPLETE
+                events.append(
+                    {
+                        "event_type": "ai_result_reused",
+                        "status": MissionStatus.AI_PROCESSING,
+                        "message": "星务已持有经 GTX 校验的 AI 结果，本次重试直接复用。",
+                        "data": {"result": state["ai_result"], "gtx_bytes": 0},
+                    }
+                )
+                self.persist(mission_id)
+                return {"events": events, "phase": state["phase"]}
             clock = self.clock_for(simulated_at)
             transport = TCPTransport(profile=default_link_profiles()[LinkKind.GTX], clock=clock)
             try:
@@ -327,7 +339,15 @@ class PlatformState:
                             "mission_id": mission_id,
                             "run_id": command.run_id,
                             "ai_mode": command.ai_mode,
-                            "options": {},
+                            "options": {
+                                "project_context": command.project_context,
+                                "analysis_prompt": command.analysis_prompt,
+                                "mission_name": command.name,
+                                "target_name": command.target_name,
+                                "target_latitude": command.target_latitude,
+                                "target_longitude": command.target_longitude,
+                                "scene_id": command.scene_id,
+                            },
                         }
                     ),
                 )
@@ -388,12 +408,19 @@ class PlatformState:
         scenario = ScenarioConfig.model_validate(state["scenario"])
         directory = self.product_dir / mission_id
         package_path = directory / f"{mission_id}_result_package.zip"
-        include_levels = [ProductLevel.AI_RESULT, ProductLevel.THUMBNAIL, ProductLevel.STAC]
+        include_levels = [
+            ProductLevel.AI_RESULT,
+            ProductLevel.L1B,
+            ProductLevel.THUMBNAIL,
+            ProductLevel.STAC,
+        ]
         member_index: dict[str, str] = {}
         summary = {
             "mission_id": mission_id,
             "run_id": command.run_id,
             "ai_mode": command.ai_mode,
+            "project_context": command.project_context,
+            "analysis_prompt": command.analysis_prompt,
             "planned_windows": command.planned_windows.model_dump(mode="json")
             if command.planned_windows
             else None,

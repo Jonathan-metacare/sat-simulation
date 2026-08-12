@@ -1043,6 +1043,18 @@
             "$ref": "#/components/schemas/AIMode",
             "default": "yolo"
           },
+          "project_context": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Project Context",
+            "default": "星上智能计算数字孪生光学观测任务"
+          },
+          "analysis_prompt": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Analysis Prompt",
+            "default": "识别图像中的主要地物、目标和异常，说明判断依据与不确定性。"
+          },
           "planned_windows": {
             "anyOf": [
               {
@@ -1104,6 +1116,18 @@
           "ai_mode": {
             "$ref": "#/components/schemas/AIMode",
             "default": "yolo"
+          },
+          "project_context": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Project Context",
+            "default": "星上智能计算数字孪生光学观测任务"
+          },
+          "analysis_prompt": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Analysis Prompt",
+            "default": "识别图像中的主要地物、目标和异常，说明判断依据与不确定性。"
           }
         },
         "type": "object",

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Activity, AlertTriangle, Box, Clock3, Database, FileImage, Gauge,
   LoaderCircle, Orbit, Radio, RefreshCw, ShieldCheck, StepForward, Zap
@@ -10,7 +12,7 @@ import {
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
 import { useDashboardStore } from "~/lib/store";
 import type {
-  AIMode, MissionPhase, OrbitTrack, ProductManifest, PublicConfig
+  AIMode, MissionPhase, MissionResultResponse, OrbitTrack, ProductManifest, PublicConfig
 } from "~/lib/types";
 import { OrbitGlobe } from "./orbit-globe";
 import { SystemTopology } from "./system-topology";
@@ -51,6 +53,9 @@ export function MissionDashboard() {
   const [error, setError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [aiMode, setAiMode] = useState<AIMode>("yolo");
+  const [projectContext, setProjectContext] = useState("星上智能计算数字孪生光学观测任务");
+  const [analysisPrompt, setAnalysisPrompt] = useState("识别图像中的主要地物、目标和异常，说明判断依据与不确定性。");
+  const [missionResult, setMissionResult] = useState<MissionResultResponse>();
   const [playbackSpeed, setPlaybackSpeed] = useState<1 | 2 | 5>(1);
   const missionId = mission?.command.id;
   const runId = mission?.command.run_id;
@@ -99,6 +104,13 @@ export function MissionDashboard() {
     return () => window.clearInterval(timer);
   }, [executionState, missionId, setMission]);
   useEffect(() => {
+    if (!missionId || mission?.phase !== "completed") {
+      setMissionResult(undefined);
+      return;
+    }
+    void api.missionResult(missionId).then(setMissionResult).catch(() => setMissionResult(undefined));
+  }, [mission?.phase, missionId]);
+  useEffect(() => {
     if (!missionId || !runId || !scenarioId) return;
     const stream = new EventSource(eventStreamURL(runId));
     const refreshLatest = async () => {
@@ -135,7 +147,9 @@ export function MissionDashboard() {
     if (mission && !["completed", "cancelled"].includes(mission.execution_state)) {
       await api.cancelMission(mission.command.id);
     }
-    const created = await api.createMission(scenario.config.id, aiMode);
+    const created = await api.createMission(
+      scenario.config.id, aiMode, projectContext.trim(), analysisPrompt.trim()
+    );
     setMission(created);
     setCreateOpen(false);
   });
@@ -152,6 +166,8 @@ export function MissionDashboard() {
   const products = mission?.products ?? [];
   const onboardProducts = mission?.onboard_products ?? [];
   const thumbnail = products.find((item) => item.level === "thumbnail");
+  const l1b = products.find((item) => item.level === "l1b");
+  const analysis = missionResult?.ai_result?.result;
   const spacecraft = useMemo(() => {
     for (const event of [...(mission?.events ?? [])].reverse()) {
       const value = event.data.spacecraft;
@@ -297,8 +313,12 @@ export function MissionDashboard() {
         </div>
         <div className="space-y-4">
           <div className="panel overflow-hidden rounded-2xl">
-            <PanelHeader icon={<FileImage size={16} />} title="L1B 地面预览" note="DOWNLINKED ARTIFACT" />
+            <PanelHeader icon={<FileImage size={16} />} title="L1B 与智能分析" note="DOWNLINKED RESULT" />
             <div className="relative flex min-h-56 items-center justify-center bg-black/25">{thumbnail ? <Image unoptimized fill sizes="(max-width: 1280px) 100vw, 40vw" src={artifactURL(thumbnail.id)} alt="L1B optical thumbnail" className="object-contain" /> : <Empty text="L1B 下传后显示缩略图。" />}</div>
+            <div className="border-t border-white/[.06] p-4">
+              <div className="mb-2 flex items-center justify-between"><span className="text-xs font-medium text-cyan-100">模型分析结果</span>{l1b && <a className="text-[10px] text-cyan-300 hover:text-cyan-100" href={artifactURL(l1b.id)} target="_blank" rel="noreferrer">下载 L1B GeoTIFF</a>}</div>
+              {analysis?.content ? <><div className="mb-3 flex flex-wrap gap-2 text-[10px] text-slate-500"><span>{analysis.provider}</span><span>{analysis.model_version ?? "unknown model"}</span>{analysis.elapsed_ms !== undefined && <span>{(analysis.elapsed_ms / 1000).toFixed(1)} s</span>}</div>{analysis.truncated && <div className="mb-3 rounded-lg border border-orange-300/25 bg-orange-300/10 px-3 py-2 text-xs text-orange-200">{analysis.reason ?? "模型输出达到长度上限，报告可能不完整。"}</div>}<div className="llm-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{analysis.content}</ReactMarkdown></div></> : <Empty text={mission?.phase === "completed" ? "结果包中没有可展示的模型分析。" : "第六步结果包下传后，模型分析将在这里与 L1B 一起展示。"} />}
+            </div>
           </div>
           <div className="panel rounded-2xl p-4">
             <div className="mb-3 flex items-center justify-between"><Title icon={<Box size={16} />} text="智能载荷 Provider" orange /><span className="rounded border border-orange-300/20 bg-orange-300/10 px-2 py-1 text-[10px] text-orange-200">{mission?.ai_mode === "llm" ? (providerHealth.language?.status ?? "UNKNOWN") : (providerHealth.detection?.status ?? "UNKNOWN")}</span></div>
@@ -315,6 +335,11 @@ export function MissionDashboard() {
             <button onClick={() => setAiMode("yolo")} className={`rounded-xl border p-4 text-left ${aiMode === "yolo" ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-black/20"}`}><div className="text-sm text-slate-100">YOLO 检测</div><div className="mt-1 text-[10px] text-slate-500">舰船 / 飞机 / 车辆</div></button>
             <button onClick={() => setAiMode("llm")} className={`rounded-xl border p-4 text-left ${aiMode === "llm" ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-black/20"}`}><div className="text-sm text-slate-100">LLM 分析</div><div className="mt-1 text-[10px] text-slate-500">多模态图像解译</div></button>
           </div>
+          {aiMode === "llm" && <div className="mb-5 space-y-3">
+            <label className="block text-xs text-slate-400">项目/用户背景<textarea value={projectContext} onChange={(event) => setProjectContext(event.target.value)} maxLength={4000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder="例如：海上目标监测项目，重点关注船舶和异常航迹。" /></label>
+            <label className="block text-xs text-slate-400">本次分析要求<textarea value={analysisPrompt} onChange={(event) => setAnalysisPrompt(event.target.value)} maxLength={2000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder="例如：识别主要目标，说明数量、位置和置信程度。" /></label>
+            <p className="text-[10px] leading-4 text-slate-600">第五步将把 L1B 生成的视觉预览、L1B 元数据和上述背景一起发送给模型。</p>
+          </div>}
           <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>取消</Button><Button onClick={createMission} active disabled={working}>{working ? "初始化中" : mission && !["completed", "cancelled"].includes(mission.execution_state) ? "结束当前任务并新建" : "初始化任务"}</Button></div>
         </div>
       </div>}
