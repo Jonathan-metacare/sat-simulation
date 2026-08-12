@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import random
 from collections.abc import Awaitable, Callable
@@ -10,8 +11,26 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sat_simulation.common.clock import SimulationClock
-from sat_simulation.common.models import FaultRule, LinkKind, LinkProfile
-from sat_simulation.common.protocol import Frame, LinkCode, MessageType, ProtocolError, read_frame
+from sat_simulation.common.models import (
+    FaultRule,
+    LinkKind,
+    LinkProfile,
+    NodeKind,
+    ProtocolFrameTrace,
+    ProtocolLinkKind,
+    ProtocolTransaction,
+    ProtocolTransactionStatus,
+    utc_now,
+)
+from sat_simulation.common.observation import describe_payload
+from sat_simulation.common.protocol import (
+    Frame,
+    LinkCode,
+    MessageType,
+    ProtocolError,
+    crc32c,
+    read_frame,
+)
 
 
 def _uuid(value: str) -> UUID:
@@ -51,6 +70,7 @@ class RemoteTransferError(RuntimeError):
 
 
 Handler = Callable[[MessageType, bytes, Frame], Awaitable[dict[str, Any]]]
+TraceSink = Callable[[ProtocolTransaction | ProtocolFrameTrace], Awaitable[None]]
 
 
 class TCPTransport:
@@ -61,11 +81,26 @@ class TCPTransport:
         clock: SimulationClock,
         fault: FaultRule | None = None,
         seed: int = 0,
+        trace_sink: TraceSink | None = None,
+        source_node: NodeKind = NodeKind.PLATFORM,
+        target_node: NodeKind = NodeKind.GPU,
     ) -> None:
         self.profile = profile
         self.clock = clock
         self.fault = fault
         self.rng = random.Random(seed)
+        self.trace_sink = trace_sink
+        self.source_node = source_node
+        self.target_node = target_node
+
+    async def _trace(self, value: ProtocolTransaction | ProtocolFrameTrace) -> None:
+        if not self.trace_sink:
+            return
+        try:
+            await self.trace_sink(value)
+        except Exception:
+            # Observation-plane failures must never break mission transport.
+            return
 
     async def _wait(self, simulated_seconds: float) -> None:
         """Advance an explicitly-triggered transfer even while the run is paused."""
@@ -92,6 +127,20 @@ class TCPTransport:
             raise BufferError("transfer exceeds configured link queue capacity")
 
         transfer_id = uuid4()
+        transaction = ProtocolTransaction(
+            id=str(transfer_id),
+            run_id=run_id,
+            mission_id=mission_id,
+            link=ProtocolLinkKind(self.profile.kind.value),
+            message_type=message_type.name,
+            source_node=self.source_node,
+            target_node=self.target_node,
+            direction=f"{self.source_node.value}->{self.target_node.value}",
+            total_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            payload=describe_payload(message_type, payload),
+        )
+        await self._trace(transaction)
         chunks = [
             payload[index : index + self.profile.frame_payload_bytes]
             for index in range(0, len(payload), self.profile.frame_payload_bytes)
@@ -100,6 +149,7 @@ class TCPTransport:
         retries = 0
         crc_failures = 0
         response: dict[str, Any] = {}
+        attempt = 0
 
         reader, writer = await asyncio.open_connection(host, port)
         try:
@@ -115,6 +165,14 @@ class TCPTransport:
                         and self.rng.random() < self.fault.drop_rate
                     )
                     if drop:
+                        await self._trace(
+                            ProtocolFrameTrace(
+                                transaction_id=str(transfer_id), sequence=sequence,
+                                total=len(chunks), message_type=message_type.name,
+                                payload_bytes=len(chunks[sequence]), simulated_at=self.clock.now(),
+                                attempt=attempt, ack_status="dropped",
+                            )
+                        )
                         continue
                     corrupt = bool(
                         self.fault
@@ -138,6 +196,16 @@ class TCPTransport:
                         payload=chunks[sequence],
                     )
                     encoded = frame.encode(corrupt_crc=corrupt)
+                    await self._trace(
+                        ProtocolFrameTrace(
+                            transaction_id=str(transfer_id), sequence=sequence,
+                            total=len(chunks), message_type=message_type.name,
+                            payload_bytes=len(chunks[sequence]), simulated_at=self.clock.now(),
+                            crc32c=f"{crc32c(chunks[sequence]):08x}",
+                            crc_valid=not corrupt, attempt=attempt,
+                            ack_status="crc_error" if corrupt else "sent",
+                        )
+                    )
                     writer.write(encoded)
                     if duplicate:
                         writer.write(encoded)
@@ -168,16 +236,29 @@ class TCPTransport:
 
                 reply = await read_frame(reader)
                 response = json.loads(reply.payload.decode("utf-8"))
+                missing = {int(item) for item in response.get("missing", [])}
+                await self._trace(
+                    ProtocolFrameTrace(
+                        transaction_id=str(transfer_id), sequence=0, total=1,
+                        message_type=reply.message_type.name, payload_bytes=len(reply.payload),
+                        simulated_at=self.clock.now(), attempt=attempt,
+                        ack_status="nak" if reply.message_type == MessageType.NAK else "ack",
+                        missing_sequences=sorted(missing),
+                    )
+                )
                 if reply.message_type == MessageType.NAK and response.get("error"):
+                    transaction.status = ProtocolTransactionStatus.FAILED
+                    transaction.completed_at = utc_now()
+                    await self._trace(transaction)
                     raise RemoteTransferError(
                         str(response["error"]), code=str(response.get("error_code", "remote_error"))
                     )
-                missing = {int(item) for item in response.get("missing", [])}
                 if not missing:
                     pending.clear()
                     break
                 pending = missing
                 retries += 1
+                attempt += 1
                 if retries > self.profile.max_retries:
                     raise ConnectionError(
                         f"transfer failed after {retries} retries: {sorted(missing)}"
@@ -187,6 +268,12 @@ class TCPTransport:
         finally:
             writer.close()
             await writer.wait_closed()
+        transaction.status = ProtocolTransactionStatus.COMPLETED
+        transaction.completed_at = utc_now()
+        transaction.frame_count = len(chunks)
+        transaction.retry_count = retries
+        transaction.crc_failures = crc_failures
+        await self._trace(transaction)
         return TransferResult(
             transfer_id=str(transfer_id),
             total_bytes=len(payload),

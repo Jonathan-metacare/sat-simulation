@@ -9,6 +9,8 @@ export type MissionPhase =
 export type ExecutionState =
   | "waiting" | "running" | "blocked" | "retryable_error" | "completed" | "cancelled";
 export type AIMode = "yolo" | "llm";
+export type NodeKind = "ground" | "platform" | "optical" | "gpu";
+export type ProtocolLinkKind = "uplink" | "downlink" | "gtx" | "payload_bus";
 
 export interface ScenarioConfig {
   id: string; name: string; seed: number; epoch: string; clock_rate: 1 | 10 | 100;
@@ -54,6 +56,35 @@ export interface TransferRecord {
   link: "gtx" | "uplink" | "downlink"; name: string;
   total_bytes: number; transferred_bytes: number; frame_count: number;
   retry_count: number; crc_failures: number; status: string;
+  protocol_transaction_id?: string;
+}
+export interface NodeArtifact {
+  key: string; name: string; level: string; mime_type: string;
+  size_bytes: number; sha256: string; available: boolean;
+  observation_only: boolean; previewable: boolean;
+}
+export interface NodeSnapshot {
+  node: NodeKind; mission_id: string; reachable: boolean; status: string;
+  observation_notice?: string; state: Record<string, unknown>; artifacts: NodeArtifact[];
+}
+export interface ProtocolPayloadView {
+  kind: "json" | "binary" | "none"; mime_type?: string;
+  decoded_json?: Record<string, unknown>; summary: Record<string, unknown>; redacted: boolean;
+}
+export interface ProtocolTransaction {
+  id: string; run_id: string; mission_id: string; link: ProtocolLinkKind;
+  protocol: string; message_type: string; source_node: NodeKind; target_node: NodeKind;
+  direction: string; status: "running" | "completed" | "failed";
+  total_bytes: number; frame_count: number; retry_count: number; crc_failures: number;
+  sha256?: string; payload: ProtocolPayloadView; started_at: string; completed_at?: string;
+  legacy_summary_only: boolean;
+}
+export interface ProtocolFrameTrace {
+  id: string; transaction_id: string; sequence: number; total: number;
+  message_type: string; payload_bytes: number; simulated_at: string; crc32c?: string;
+  crc_valid: boolean; attempt: number;
+  ack_status: "sent" | "ack" | "nak" | "dropped" | "crc_error";
+  missing_sequences: number[];
 }
 export interface StepAttempt {
   id: string; mission_id: string; from_phase: MissionPhase; target_phase: MissionPhase;

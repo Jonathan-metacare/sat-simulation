@@ -193,6 +193,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/missions/{mission_id}/nodes/{node}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Node Snapshot */
+        get: operations["get_node_snapshot_api_missions__mission_id__nodes__node__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/missions/{mission_id}/nodes/{node}/artifacts/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Node Artifact */
+        get: operations["get_node_artifact_api_missions__mission_id__nodes__node__artifacts__key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/missions/{mission_id}/result": {
         parameters: {
             query?: never;
@@ -254,6 +288,74 @@ export interface paths {
         };
         /** List Transfers */
         get: operations["list_transfers_api_transfers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/missions/{mission_id}/protocol/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Protocol Transactions */
+        get: operations["list_protocol_transactions_api_missions__mission_id__protocol_transactions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/protocol/transactions/{transaction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Protocol Transaction */
+        get: operations["get_protocol_transaction_api_protocol_transactions__transaction_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/protocol/transactions/{transaction_id}/frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Protocol Frames */
+        get: operations["get_protocol_frames_api_protocol_transactions__transaction_id__frames_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/protocol/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream Protocol */
+        get: operations["stream_protocol_api_protocol_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -641,6 +743,62 @@ export interface components {
              */
             updated_at: string;
         };
+        /** NodeArtifact */
+        NodeArtifact: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Level */
+            level: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Sha256 */
+            sha256: string;
+            /**
+             * Available
+             * @default true
+             */
+            available: boolean;
+            /**
+             * Observation Only
+             * @default true
+             */
+            observation_only: boolean;
+            /**
+             * Previewable
+             * @default false
+             */
+            previewable: boolean;
+        };
+        /**
+         * NodeKind
+         * @enum {string}
+         */
+        NodeKind: "ground" | "platform" | "optical" | "gpu";
+        /** NodeSnapshot */
+        NodeSnapshot: {
+            node: components["schemas"]["NodeKind"];
+            /** Mission Id */
+            mission_id: string;
+            /**
+             * Reachable
+             * @default true
+             */
+            reachable: boolean;
+            /** Status */
+            status: string;
+            /** Observation Notice */
+            observation_notice?: string | null;
+            /** State */
+            state?: {
+                [key: string]: unknown;
+            };
+            /** Artifacts */
+            artifacts?: components["schemas"]["NodeArtifact"][];
+        };
         /** PlannedWindows */
         PlannedWindows: {
             uplink: components["schemas"]["ContactWindow"];
@@ -702,6 +860,138 @@ export interface components {
             /** Artifact Path */
             artifact_path?: string | null;
         };
+        /** ProtocolFrameTrace */
+        ProtocolFrameTrace: {
+            /** Id */
+            id?: string;
+            /** Transaction Id */
+            transaction_id: string;
+            /** Sequence */
+            sequence: number;
+            /** Total */
+            total: number;
+            /** Message Type */
+            message_type: string;
+            /** Payload Bytes */
+            payload_bytes: number;
+            /**
+             * Simulated At
+             * Format: date-time
+             */
+            simulated_at: string;
+            /** Crc32C */
+            crc32c?: string | null;
+            /**
+             * Crc Valid
+             * @default true
+             */
+            crc_valid: boolean;
+            /**
+             * Attempt
+             * @default 0
+             */
+            attempt: number;
+            /**
+             * Ack Status
+             * @default sent
+             * @enum {string}
+             */
+            ack_status: "sent" | "ack" | "nak" | "dropped" | "crc_error";
+            /** Missing Sequences */
+            missing_sequences?: number[];
+        };
+        /**
+         * ProtocolLinkKind
+         * @enum {string}
+         */
+        ProtocolLinkKind: "uplink" | "downlink" | "gtx" | "payload_bus";
+        /** ProtocolPayloadView */
+        ProtocolPayloadView: {
+            /**
+             * Kind
+             * @default none
+             * @enum {string}
+             */
+            kind: "json" | "binary" | "none";
+            /** Mime Type */
+            mime_type?: string | null;
+            /** Decoded Json */
+            decoded_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+        };
+        /** ProtocolTransaction */
+        ProtocolTransaction: {
+            /** Id */
+            id: string;
+            /** Run Id */
+            run_id: string;
+            /** Mission Id */
+            mission_id: string;
+            link: components["schemas"]["ProtocolLinkKind"];
+            /**
+             * Protocol
+             * @default SIMF/1
+             */
+            protocol: string;
+            /** Message Type */
+            message_type: string;
+            source_node: components["schemas"]["NodeKind"];
+            target_node: components["schemas"]["NodeKind"];
+            /** Direction */
+            direction: string;
+            /** @default running */
+            status: components["schemas"]["ProtocolTransactionStatus"];
+            /**
+             * Total Bytes
+             * @default 0
+             */
+            total_bytes: number;
+            /**
+             * Frame Count
+             * @default 0
+             */
+            frame_count: number;
+            /**
+             * Retry Count
+             * @default 0
+             */
+            retry_count: number;
+            /**
+             * Crc Failures
+             * @default 0
+             */
+            crc_failures: number;
+            /** Sha256 */
+            sha256?: string | null;
+            payload?: components["schemas"]["ProtocolPayloadView"];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at?: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Legacy Summary Only
+             * @default false
+             */
+            legacy_summary_only: boolean;
+        };
+        /**
+         * ProtocolTransactionStatus
+         * @enum {string}
+         */
+        ProtocolTransactionStatus: "running" | "completed" | "failed";
         /** ScenarioConfig */
         ScenarioConfig: {
             /** Id */
@@ -868,6 +1158,8 @@ export interface components {
             started_at?: string | null;
             /** Completed At */
             completed_at?: string | null;
+            /** Protocol Transaction Id */
+            protocol_transaction_id?: string | null;
         };
         /**
          * TransferStatus
@@ -1276,6 +1568,71 @@ export interface operations {
             };
         };
     };
+    get_node_snapshot_api_missions__mission_id__nodes__node__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+                node: components["schemas"]["NodeKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_node_artifact_api_missions__mission_id__nodes__node__artifacts__key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+                node: components["schemas"]["NodeKind"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_mission_result_api_missions__mission_id__result_get: {
         parameters: {
             query?: never;
@@ -1423,6 +1780,130 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TransferRecord"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_protocol_transactions_api_missions__mission_id__protocol_transactions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolTransaction"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_protocol_transaction_api_protocol_transactions__transaction_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolTransaction"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_protocol_frames_api_protocol_transactions__transaction_id__frames_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtocolFrameTrace"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_protocol_api_protocol_stream_get: {
+        parameters: {
+            query: {
+                run_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -291,6 +291,13 @@ class OpticalPipeline:
         )
         return OpticalProducts(manifests=manifests, paths=paths, truth_path=scene_path)
 
+    def raw_quicklook(self, *, raw_path: Path, scene_path: Path, destination: Path) -> None:
+        """Render a debug-only preview from reconstructed detector DN packets."""
+        with rasterio.open(scene_path) as src:
+            shape = (src.count, src.height, src.width)
+        dn = self._read_raw(raw_path, shape).astype(np.float64) / self.sensor.max_dn
+        self._thumbnail(dn, destination)
+
     def _simulate_detector(self, truth: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         rng = np.random.default_rng(self.sensor.seed)
         prnu = rng.normal(1.0, self.sensor.prnu_sigma, size=truth.shape)

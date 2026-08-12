@@ -9,8 +9,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 import rasterio
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from sat_simulation import __version__
 from sat_simulation.common.clock import SimulationClock
@@ -21,8 +23,16 @@ from sat_simulation.common.models import (
     MissionCommand,
     MissionPhase,
     MissionStatus,
+    NodeArtifact,
+    NodeKind,
+    NodeSnapshot,
     ProductLevel,
     ProductManifest,
+    ProtocolFrameTrace,
+    ProtocolLinkKind,
+    ProtocolPayloadView,
+    ProtocolTransaction,
+    ProtocolTransactionStatus,
     ScenarioConfig,
     TransferRecord,
     TransferStatus,
@@ -30,7 +40,7 @@ from sat_simulation.common.models import (
     utc_now,
 )
 from sat_simulation.common.orbit import target_attitude
-from sat_simulation.common.protocol import Frame, MessageType
+from sat_simulation.common.protocol import Frame, MessageType, crc32c
 from sat_simulation.common.wire import pack_json, pack_product, unpack_json
 from sat_simulation.config import Settings, settings
 from sat_simulation.optical.pipeline import (
@@ -52,6 +62,69 @@ class PlatformState:
         self.uplink_receiver = TCPReceiver(self.handle_uplink)
         self.result_receiver = TCPReceiver(self.handle_ai_result)
         self.missions: dict[str, dict[str, Any]] = {}
+
+    async def report_trace(self, value: ProtocolTransaction | ProtocolFrameTrace) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                await client.post(
+                    f"{self.settings.ground_http_url}/internal/observation/protocol",
+                    json={
+                        "kind": "transaction"
+                        if isinstance(value, ProtocolTransaction)
+                        else "frame",
+                        "value": value.model_dump(mode="json"),
+                    },
+                )
+        except Exception:
+            return
+
+    async def report_optical_bus(
+        self, command: MissionCommand, manifest: ProductManifest, simulated_at: datetime
+    ) -> None:
+        request_id = f"payload-capture-{command.id}"
+        request = ProtocolTransaction(
+            id=request_id, run_id=command.run_id, mission_id=command.id,
+            link=ProtocolLinkKind.PAYLOAD_BUS, protocol="PayloadDriver/1",
+            message_type="CAPTURE_REQUEST", source_node=NodeKind.PLATFORM,
+            target_node=NodeKind.OPTICAL, direction="platform->optical",
+            status=ProtocolTransactionStatus.COMPLETED,
+            total_bytes=0, frame_count=1,
+            payload=ProtocolPayloadView(kind="json", mime_type="application/json", decoded_json={
+                "mission_id": command.id, "scene_id": command.scene_id,
+                "target": {"name": command.target_name, "latitude": command.target_latitude,
+                           "longitude": command.target_longitude},
+            }), completed_at=utc_now(),
+        )
+        await self.report_trace(request)
+        await self.report_trace(ProtocolFrameTrace(
+            transaction_id=request_id, sequence=0, total=1,
+            message_type="CAPTURE_REQUEST", payload_bytes=0,
+            simulated_at=simulated_at, ack_status="ack",
+        ))
+        raw_id = f"payload-raw-{command.id}"
+        packet_count = int(manifest.quality.get("packet_count", 0))
+        raw = ProtocolTransaction(
+            id=raw_id, run_id=command.run_id, mission_id=command.id,
+            link=ProtocolLinkKind.PAYLOAD_BUS, protocol="PayloadDriver/1",
+            message_type="RAW_PACKET", source_node=NodeKind.OPTICAL,
+            target_node=NodeKind.PLATFORM, direction="optical->platform",
+            status=ProtocolTransactionStatus.COMPLETED,
+            total_bytes=manifest.size_bytes, frame_count=packet_count,
+            sha256=manifest.sha256,
+            payload=ProtocolPayloadView(kind="binary", mime_type=manifest.mime_type, summary={
+                "name": manifest.name, "bands": 3, "packets": packet_count,
+                "packet_header": "OPTR", "sha256": manifest.sha256,
+            }), completed_at=utc_now(),
+        )
+        await self.report_trace(raw)
+        # Persist a bounded representative sample rather than hundreds of identical rows.
+        for sequence in range(min(packet_count, 12)):
+            await self.report_trace(ProtocolFrameTrace(
+                transaction_id=raw_id, sequence=sequence, total=packet_count,
+                message_type="RAW_PACKET", payload_bytes=512,
+                simulated_at=simulated_at, crc32c=f"{crc32c(str(sequence).encode()):08x}",
+                ack_status="ack",
+            ))
 
     async def start(self) -> None:
         self.scene_dir.mkdir(parents=True, exist_ok=True)
@@ -219,11 +292,20 @@ class PlatformState:
                 run_id=command.run_id,
                 mission_id=mission_id,
             )
+            raw_quicklook = mission_dir / f"{mission_id}_raw_quicklook.png"
+            await asyncio.to_thread(
+                pipeline.raw_quicklook,
+                raw_path=path,
+                scene_path=scene_path,
+                destination=raw_quicklook,
+            )
             state["spacecraft"] = spacecraft.model_dump(mode="json")
             state["captured_at"] = simulated_at.isoformat()
             state["products"][ProductLevel.RAW] = manifest.model_dump(mode="json")
             state["products"][ProductLevel.RAW]["artifact_path"] = str(path)
+            state["raw_quicklook_path"] = str(raw_quicklook)
             state["phase"] = MissionPhase.CAPTURE_COMPLETE
+            await self.report_optical_bus(command, manifest, simulated_at)
             events.extend(
                 [
                     {
@@ -286,6 +368,9 @@ class PlatformState:
                 clock=clock,
                 fault=self.fault_for(state, LinkKind.GTX),
                 seed=scenario.seed,
+                trace_sink=self.report_trace,
+                source_node=NodeKind.PLATFORM,
+                target_node=NodeKind.GPU,
             )
             transfer = await transport.send(
                 self.settings.gpu_gtx_host,
@@ -326,7 +411,11 @@ class PlatformState:
                 self.persist(mission_id)
                 return {"events": events, "phase": state["phase"]}
             clock = self.clock_for(simulated_at)
-            transport = TCPTransport(profile=default_link_profiles()[LinkKind.GTX], clock=clock)
+            transport = TCPTransport(
+                profile=default_link_profiles()[LinkKind.GTX], clock=clock,
+                trace_sink=self.report_trace, source_node=NodeKind.PLATFORM,
+                target_node=NodeKind.GPU,
+            )
             try:
                 transfer = await transport.send(
                     self.settings.gpu_gtx_host,
@@ -399,6 +488,7 @@ class PlatformState:
             status=TransferStatus.COMPLETED,
             started_at=utc_now(),
             completed_at=utc_now(),
+            protocol_transaction_id=result.transfer_id,
         )
 
     async def downlink_result_package(
@@ -464,6 +554,9 @@ class PlatformState:
             clock=clock,
             fault=self.fault_for(state, LinkKind.DOWNLINK),
             seed=scenario.seed,
+            trace_sink=self.report_trace,
+            source_node=NodeKind.PLATFORM,
+            target_node=NodeKind.GROUND,
         )
         result = await transport.send(
             self.settings.ground_downlink_host,
@@ -476,6 +569,74 @@ class PlatformState:
         return self.transfer_record(
             command, LinkKind.DOWNLINK, manifest.name, manifest.sha256, result
         ), manifest
+
+    def node_snapshot(self, mission_id: str, node: NodeKind) -> NodeSnapshot:
+        state = self.missions.get(mission_id)
+        if not state:
+            raise KeyError(mission_id)
+        products = [
+            ProductManifest.model_validate(value)
+            for value in state.get("products", {}).values()
+        ]
+        if node == NodeKind.OPTICAL:
+            products = [item for item in products if item.level == ProductLevel.RAW]
+            sensor = SensorConfig(seed=int(state["scenario"]["seed"]))
+            public_state = {
+                "phase": state.get("phase"), "captured_at": state.get("captured_at"),
+                "sensor": sensor.__dict__, "scene_id": state["command"].get("scene_id"),
+                "raw_packets": sum(int(item.quality.get("packet_count", 0)) for item in products),
+                "missing_packets": 0, "crc_failures": 0,
+            }
+        else:
+            public_state = {
+                "phase": state.get("phase"), "spacecraft": state.get("spacecraft"),
+                "clock": state.get("clock"), "received_at": state.get("received_at"),
+                "ai_result": state.get("ai_result"),
+            }
+        artifacts = [NodeArtifact(
+            key=item.id, name=item.name, level=item.level, mime_type=item.mime_type,
+            size_bytes=item.size_bytes, sha256=item.sha256,
+            previewable=item.level
+            in {ProductLevel.THUMBNAIL, ProductLevel.STAC, ProductLevel.AI_RESULT},
+        ) for item in products if item.artifact_path]
+        quicklook = Path(str(state.get("raw_quicklook_path", "")))
+        if node == NodeKind.OPTICAL and quicklook.is_file():
+            artifacts.append(NodeArtifact(
+                key="raw_quicklook", name=quicklook.name, level="raw_quicklook",
+                mime_type="image/png", size_bytes=quicklook.stat().st_size,
+                sha256=sha256_file(quicklook), previewable=True,
+            ))
+        return NodeSnapshot(
+            node=node, mission_id=mission_id, status=str(state.get("phase", "unknown")),
+            observation_notice="仿真观察数据，未通过星地下传", state=public_state,
+            artifacts=artifacts,
+        )
+
+    def artifact(self, mission_id: str, key: str, node: NodeKind) -> tuple[Path, ProductManifest]:
+        snapshot = self.node_snapshot(mission_id, node)
+        if key not in {item.key for item in snapshot.artifacts}:
+            raise KeyError(key)
+        state = self.missions[mission_id]
+        if node == NodeKind.OPTICAL and key == "raw_quicklook":
+            path = Path(str(state.get("raw_quicklook_path", ""))).resolve()
+            if not path.is_file() or self.product_dir.resolve() not in path.parents:
+                raise KeyError(key)
+            command = MissionCommand.model_validate(state["command"])
+            return path, ProductManifest(
+                id="raw_quicklook", run_id=command.run_id, mission_id=mission_id,
+                level=ProductLevel.THUMBNAIL, name=path.name, mime_type="image/png",
+                size_bytes=path.stat().st_size, sha256=sha256_file(path),
+                quality={"observation_only": True}, artifact_path=str(path),
+            )
+        manifest = next(
+            ProductManifest.model_validate(value)
+            for value in state.get("products", {}).values()
+            if value.get("id") == key
+        )
+        path = Path(str(manifest.artifact_path)).resolve()
+        if not path.is_file() or self.product_dir.resolve() not in path.parents:
+            raise KeyError(key)
+        return path, manifest
 
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
@@ -511,6 +672,23 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         if not value:
             raise HTTPException(404, "mission not found")
         return value
+
+    @app.get("/internal/missions/{mission_id}/nodes/{node}", response_model=NodeSnapshot)
+    async def node_snapshot(mission_id: str, node: NodeKind) -> NodeSnapshot:
+        if node not in {NodeKind.PLATFORM, NodeKind.OPTICAL}:
+            raise HTTPException(404, "node not hosted by platform")
+        try:
+            return state.node_snapshot(mission_id, node)
+        except KeyError as exc:
+            raise HTTPException(404, "mission not found") from exc
+
+    @app.get("/internal/missions/{mission_id}/nodes/{node}/artifacts/{key}")
+    async def node_artifact(mission_id: str, node: NodeKind, key: str):
+        try:
+            path, manifest = state.artifact(mission_id, key, node)
+        except KeyError as exc:
+            raise HTTPException(404, "artifact not found") from exc
+        return FileResponse(path, media_type=manifest.mime_type, filename=manifest.name)
 
     @app.post("/internal/scenes")
     async def stage_scene(

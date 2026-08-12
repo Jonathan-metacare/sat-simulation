@@ -8,14 +8,26 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+import httpx
 import numpy as np
 import rasterio
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from sat_simulation import __version__
 from sat_simulation.common.clock import SimulationClock
 from sat_simulation.common.link import TCPReceiver, TCPTransport
-from sat_simulation.common.models import AIMode, LinkKind, ProductManifest, default_link_profiles
+from sat_simulation.common.models import (
+    AIMode,
+    LinkKind,
+    NodeArtifact,
+    NodeKind,
+    NodeSnapshot,
+    ProductManifest,
+    ProtocolFrameTrace,
+    ProtocolTransaction,
+    default_link_profiles,
+)
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
 from sat_simulation.config import Settings, settings
@@ -36,6 +48,21 @@ class GPUState:
         self.jobs_dir = self.data_dir / "jobs"
         self.receiver = TCPReceiver(self.handle_job)
         self.jobs: dict[str, dict[str, Any]] = {}
+
+    async def report_trace(self, value: ProtocolTransaction | ProtocolFrameTrace) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                await client.post(
+                    f"{self.settings.ground_http_url}/internal/observation/protocol",
+                    json={
+                        "kind": "transaction"
+                        if isinstance(value, ProtocolTransaction)
+                        else "frame",
+                        "value": value.model_dump(mode="json"),
+                    },
+                )
+        except Exception:
+            return
 
     async def start(self) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -162,7 +189,11 @@ class GPUState:
         clock = SimulationClock(
             datetime.fromtimestamp(frame.simulated_time_ns / 1_000_000_000, tz=UTC), rate=1
         )
-        transport = TCPTransport(profile=default_link_profiles()[LinkKind.GTX], clock=clock)
+        transport = TCPTransport(
+            profile=default_link_profiles()[LinkKind.GTX], clock=clock,
+            trace_sink=self.report_trace, source_node=NodeKind.GPU,
+            target_node=NodeKind.PLATFORM,
+        )
         transfer = await transport.send(
             self.settings.platform_gtx_result_host,
             self.settings.platform_gtx_result_port,
@@ -178,6 +209,60 @@ class GPUState:
             "result_sha256": result_body["sha256"],
             "result_gtx_bytes": transfer.total_bytes,
         }
+
+    def node_snapshot(self, mission_id: str) -> NodeSnapshot:
+        job = self.jobs.get(mission_id)
+        if not job:
+            raise KeyError(mission_id)
+        manifest = ProductManifest.model_validate(job["manifest"])
+        artifacts = [NodeArtifact(
+            key="l1b", name=manifest.name, level="l1b", mime_type=manifest.mime_type,
+            size_bytes=manifest.size_bytes, sha256=manifest.sha256, previewable=False,
+        )]
+        thumbnail = Path(str(job.get("thumbnail_path", "")))
+        if thumbnail.is_file():
+            artifacts.append(NodeArtifact(
+                key="thumbnail", name=thumbnail.name, level="thumbnail", mime_type="image/png",
+                size_bytes=thumbnail.stat().st_size,
+                sha256=hashlib.sha256(thumbnail.read_bytes()).hexdigest(), previewable=True,
+            ))
+        result = self.jobs_dir / mission_id / "ai_result.json"
+        if result.is_file():
+            artifacts.append(NodeArtifact(
+                key="ai_result", name=result.name, level="ai_result",
+                mime_type="application/json", size_bytes=result.stat().st_size,
+                sha256=hashlib.sha256(result.read_bytes()).hexdigest(), previewable=True,
+            ))
+        return NodeSnapshot(
+            node=NodeKind.GPU, mission_id=mission_id, status=str(job.get("status", "unknown")),
+            observation_notice="仿真观察数据，未通过星地下传",
+            state={
+                "received_sha256": job.get("received_sha256"),
+                "sha_verified": job.get("received_sha256") == manifest.sha256,
+                "provider_mode": job.get("result", {}).get("ai_mode"),
+                "result": job.get("result"),
+            }, artifacts=artifacts,
+        )
+
+    def artifact(self, mission_id: str, key: str) -> tuple[Path, str, str]:
+        job = self.jobs.get(mission_id)
+        if not job:
+            raise KeyError(mission_id)
+        choices = {
+            "l1b": (
+                Path(str(job["path"])),
+                ProductManifest.model_validate(job["manifest"]).mime_type,
+            ),
+            "thumbnail": (Path(str(job["thumbnail_path"])), "image/png"),
+            "ai_result": (self.jobs_dir / mission_id / "ai_result.json", "application/json"),
+        }
+        if key not in choices:
+            raise KeyError(key)
+        path, mime = choices[key]
+        path = path.resolve()
+        if not path.is_file() or self.jobs_dir.resolve() not in path.parents:
+            raise KeyError(key)
+        return path, mime, path.name
 
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
@@ -214,6 +299,21 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     @app.get("/internal/jobs")
     async def jobs() -> dict[str, Any]:
         return state.jobs
+
+    @app.get("/internal/missions/{mission_id}/nodes/gpu", response_model=NodeSnapshot)
+    async def node_snapshot(mission_id: str) -> NodeSnapshot:
+        try:
+            return state.node_snapshot(mission_id)
+        except KeyError as exc:
+            raise HTTPException(404, "GPU job not found") from exc
+
+    @app.get("/internal/missions/{mission_id}/nodes/gpu/artifacts/{key}")
+    async def node_artifact(mission_id: str, key: str):
+        try:
+            path, mime, name = state.artifact(mission_id, key)
+        except KeyError as exc:
+            raise HTTPException(404, "artifact not found") from exc
+        return FileResponse(path, media_type=mime, filename=name)
 
     return app
 

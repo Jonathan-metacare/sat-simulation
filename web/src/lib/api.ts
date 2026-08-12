@@ -1,4 +1,4 @@
-import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, OrbitTrack, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
+import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
 
@@ -20,6 +20,10 @@ export const api = {
   advanceMission:(missionId:string,playbackSpeed:1|2|5,idempotencyKey:string)=>request<{mission_id:string;action:string}>(`/missions/${missionId}/advance`,{method:"POST",body:JSON.stringify({playback_speed:playbackSpeed,idempotency_key:idempotencyKey})}),
   cancelMission:(missionId:string)=>request<MissionDetail>(`/missions/${missionId}/cancel`,{method:"POST"}),
   missionResult:(missionId:string)=>request<MissionResultResponse>(`/missions/${missionId}/result`),
+  node:(missionId:string,node:NodeKind)=>request<NodeSnapshot>(`/missions/${missionId}/nodes/${node}`),
+  protocolTransactions:(missionId:string)=>request<ProtocolTransaction[]>(`/missions/${missionId}/protocol/transactions`),
+  protocolTransaction:(id:string)=>request<ProtocolTransaction>(`/protocol/transactions/${id}`),
+  protocolFrames:(id:string)=>request<ProtocolFrameTrace[]>(`/protocol/transactions/${id}/frames`),
   providerHealth:()=>request<Record<string,{status:string;api_url_configured?:boolean}>>('/providers/health'),
   transfers:(runId?:string)=>request<TransferRecord[]>(`/transfers${runId?`?run_id=${runId}`:""}`),
   faults:(scenarioId:string)=>request<Array<{id:string;link:string;drop_rate:number}>>(`/scenarios/${scenarioId}/faults`),
@@ -28,3 +32,5 @@ export const api = {
 };
 export function artifactURL(productId:string){return `${API_BASE}/artifacts/${productId}`;}
 export function eventStreamURL(runId:string){return `${API_BASE}/events/stream?run_id=${encodeURIComponent(runId)}`;}
+export function protocolStreamURL(runId:string){return `${API_BASE}/protocol/stream?run_id=${encodeURIComponent(runId)}`;}
+export function nodeArtifactURL(missionId:string,node:NodeKind,key:string){return `${API_BASE}/missions/${missionId}/nodes/${node}/artifacts/${encodeURIComponent(key)}`;}

@@ -79,6 +79,26 @@ class LinkKind(StrEnum):
     DOWNLINK = "downlink"
 
 
+class NodeKind(StrEnum):
+    GROUND = "ground"
+    PLATFORM = "platform"
+    OPTICAL = "optical"
+    GPU = "gpu"
+
+
+class ProtocolLinkKind(StrEnum):
+    UPLINK = "uplink"
+    DOWNLINK = "downlink"
+    GTX = "gtx"
+    PAYLOAD_BUS = "payload_bus"
+
+
+class ProtocolTransactionStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class ScenarioConfig(BaseModel):
     id: str = Field(default_factory=lambda: new_id("scenario"))
     name: str = "北京光学任务演示"
@@ -299,6 +319,74 @@ class TransferRecord(BaseModel):
     status: TransferStatus = TransferStatus.QUEUED
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    protocol_transaction_id: str | None = None
+
+
+class ProtocolPayloadView(BaseModel):
+    kind: Literal["json", "binary", "none"] = "none"
+    mime_type: str | None = None
+    decoded_json: dict[str, Any] | None = None
+    summary: dict[str, Any] = Field(default_factory=dict)
+    redacted: bool = False
+
+
+class ProtocolFrameTrace(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("frame"))
+    transaction_id: str
+    sequence: int
+    total: int
+    message_type: str
+    payload_bytes: int = Field(ge=0)
+    simulated_at: datetime
+    crc32c: str | None = None
+    crc_valid: bool = True
+    attempt: int = Field(default=0, ge=0)
+    ack_status: Literal["sent", "ack", "nak", "dropped", "crc_error"] = "sent"
+    missing_sequences: list[int] = Field(default_factory=list)
+
+
+class ProtocolTransaction(BaseModel):
+    id: str
+    run_id: str
+    mission_id: str
+    link: ProtocolLinkKind
+    protocol: str = "SIMF/1"
+    message_type: str
+    source_node: NodeKind
+    target_node: NodeKind
+    direction: str
+    status: ProtocolTransactionStatus = ProtocolTransactionStatus.RUNNING
+    total_bytes: int = Field(default=0, ge=0)
+    frame_count: int = Field(default=0, ge=0)
+    retry_count: int = Field(default=0, ge=0)
+    crc_failures: int = Field(default=0, ge=0)
+    sha256: str | None = None
+    payload: ProtocolPayloadView = Field(default_factory=ProtocolPayloadView)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    legacy_summary_only: bool = False
+
+
+class NodeArtifact(BaseModel):
+    key: str
+    name: str
+    level: str
+    mime_type: str
+    size_bytes: int = Field(ge=0)
+    sha256: str
+    available: bool = True
+    observation_only: bool = True
+    previewable: bool = False
+
+
+class NodeSnapshot(BaseModel):
+    node: NodeKind
+    mission_id: str
+    reachable: bool = True
+    status: str
+    observation_notice: str | None = None
+    state: dict[str, Any] = Field(default_factory=dict)
+    artifacts: list[NodeArtifact] = Field(default_factory=list)
 
 
 class ProductLevel(StrEnum):

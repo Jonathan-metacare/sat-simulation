@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     platform_gtx_result_port: int = 9102
     platform_http_url: str = "http://127.0.0.1:8001"
     gpu_http_url: str = "http://127.0.0.1:8002"
+    ground_http_url: str = "http://127.0.0.1:8000"
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     yolo_api_url: str | None = None
     yolo_model: str = "default"

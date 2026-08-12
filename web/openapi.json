@@ -454,6 +454,107 @@
         }
       }
     },
+    "/api/missions/{mission_id}/nodes/{node}": {
+      "get": {
+        "summary": "Get Node Snapshot",
+        "operationId": "get_node_snapshot_api_missions__mission_id__nodes__node__get",
+        "parameters": [
+          {
+            "name": "mission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mission Id"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/NodeKind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeSnapshot"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/missions/{mission_id}/nodes/{node}/artifacts/{key}": {
+      "get": {
+        "summary": "Get Node Artifact",
+        "operationId": "get_node_artifact_api_missions__mission_id__nodes__node__artifacts__key__get",
+        "parameters": [
+          {
+            "name": "mission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mission Id"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/NodeKind"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/missions/{mission_id}/result": {
       "get": {
         "summary": "Get Mission Result",
@@ -660,6 +761,168 @@
                   },
                   "title": "Response List Transfers Api Transfers Get"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/missions/{mission_id}/protocol/transactions": {
+      "get": {
+        "summary": "List Protocol Transactions",
+        "operationId": "list_protocol_transactions_api_missions__mission_id__protocol_transactions_get",
+        "parameters": [
+          {
+            "name": "mission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mission Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProtocolTransaction"
+                  },
+                  "title": "Response List Protocol Transactions Api Missions  Mission Id  Protocol Transactions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/protocol/transactions/{transaction_id}": {
+      "get": {
+        "summary": "Get Protocol Transaction",
+        "operationId": "get_protocol_transaction_api_protocol_transactions__transaction_id__get",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Transaction Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolTransaction"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/protocol/transactions/{transaction_id}/frames": {
+      "get": {
+        "summary": "Get Protocol Frames",
+        "operationId": "get_protocol_frames_api_protocol_transactions__transaction_id__frames_get",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Transaction Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProtocolFrameTrace"
+                  },
+                  "title": "Response Get Protocol Frames Api Protocol Transactions  Transaction Id  Frames Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/protocol/stream": {
+      "get": {
+        "summary": "Stream Protocol",
+        "operationId": "stream_protocol_api_protocol_stream_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -1479,6 +1742,120 @@
         ],
         "title": "MissionSummary"
       },
+      "NodeArtifact": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "default": true
+          },
+          "observation_only": {
+            "type": "boolean",
+            "title": "Observation Only",
+            "default": true
+          },
+          "previewable": {
+            "type": "boolean",
+            "title": "Previewable",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "level",
+          "mime_type",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "NodeArtifact"
+      },
+      "NodeKind": {
+        "type": "string",
+        "enum": [
+          "ground",
+          "platform",
+          "optical",
+          "gpu"
+        ],
+        "title": "NodeKind"
+      },
+      "NodeSnapshot": {
+        "properties": {
+          "node": {
+            "$ref": "#/components/schemas/NodeKind"
+          },
+          "mission_id": {
+            "type": "string",
+            "title": "Mission Id"
+          },
+          "reachable": {
+            "type": "boolean",
+            "title": "Reachable",
+            "default": true
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "observation_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Notice"
+          },
+          "state": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "State"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/NodeArtifact"
+            },
+            "type": "array",
+            "title": "Artifacts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node",
+          "mission_id",
+          "status"
+        ],
+        "title": "NodeSnapshot"
+      },
       "PlannedWindows": {
         "properties": {
           "uplink": {
@@ -1621,6 +1998,273 @@
           "sha256"
         ],
         "title": "ProductManifest"
+      },
+      "ProtocolFrameTrace": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "transaction_id": {
+            "type": "string",
+            "title": "Transaction Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "message_type": {
+            "type": "string",
+            "title": "Message Type"
+          },
+          "payload_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Payload Bytes"
+          },
+          "simulated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Simulated At"
+          },
+          "crc32c": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crc32C"
+          },
+          "crc_valid": {
+            "type": "boolean",
+            "title": "Crc Valid",
+            "default": true
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Attempt",
+            "default": 0
+          },
+          "ack_status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "ack",
+              "nak",
+              "dropped",
+              "crc_error"
+            ],
+            "title": "Ack Status",
+            "default": "sent"
+          },
+          "missing_sequences": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Missing Sequences"
+          }
+        },
+        "type": "object",
+        "required": [
+          "transaction_id",
+          "sequence",
+          "total",
+          "message_type",
+          "payload_bytes",
+          "simulated_at"
+        ],
+        "title": "ProtocolFrameTrace"
+      },
+      "ProtocolLinkKind": {
+        "type": "string",
+        "enum": [
+          "uplink",
+          "downlink",
+          "gtx",
+          "payload_bus"
+        ],
+        "title": "ProtocolLinkKind"
+      },
+      "ProtocolPayloadView": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "json",
+              "binary",
+              "none"
+            ],
+            "title": "Kind",
+            "default": "none"
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mime Type"
+          },
+          "decoded_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decoded Json"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          },
+          "redacted": {
+            "type": "boolean",
+            "title": "Redacted",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ProtocolPayloadView"
+      },
+      "ProtocolTransaction": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "mission_id": {
+            "type": "string",
+            "title": "Mission Id"
+          },
+          "link": {
+            "$ref": "#/components/schemas/ProtocolLinkKind"
+          },
+          "protocol": {
+            "type": "string",
+            "title": "Protocol",
+            "default": "SIMF/1"
+          },
+          "message_type": {
+            "type": "string",
+            "title": "Message Type"
+          },
+          "source_node": {
+            "$ref": "#/components/schemas/NodeKind"
+          },
+          "target_node": {
+            "$ref": "#/components/schemas/NodeKind"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProtocolTransactionStatus",
+            "default": "running"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "default": 0
+          },
+          "frame_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Frame Count",
+            "default": 0
+          },
+          "retry_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Retry Count",
+            "default": 0
+          },
+          "crc_failures": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Crc Failures",
+            "default": 0
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ProtocolPayloadView"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "legacy_summary_only": {
+            "type": "boolean",
+            "title": "Legacy Summary Only",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "mission_id",
+          "link",
+          "message_type",
+          "source_node",
+          "target_node",
+          "direction"
+        ],
+        "title": "ProtocolTransaction"
+      },
+      "ProtocolTransactionStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "completed",
+          "failed"
+        ],
+        "title": "ProtocolTransactionStatus"
       },
       "ScenarioConfig": {
         "properties": {
@@ -1904,6 +2548,17 @@
               }
             ],
             "title": "Completed At"
+          },
+          "protocol_transaction_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Transaction Id"
           }
         },
         "type": "object",

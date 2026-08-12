@@ -33,8 +33,13 @@ from sat_simulation.common.models import (
     MissionPhase,
     MissionStatus,
     MissionSummary,
+    NodeArtifact,
+    NodeKind,
+    NodeSnapshot,
     ProductLevel,
     ProductManifest,
+    ProtocolFrameTrace,
+    ProtocolTransaction,
     ScenarioConfig,
     ScenarioControl,
     TelemetryEvent,
@@ -100,6 +105,7 @@ class GroundState:
         self.clocks: dict[str, SimulationClock] = {}
         self.receiver = TCPReceiver(self.handle_downlink)
         self.event_conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
+        self.protocol_conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
         self.tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
@@ -131,6 +137,22 @@ class GroundState:
     async def append_event(self, event: TelemetryEvent) -> None:
         await self.repo.append_event(event)
         condition = self.event_conditions[event.run_id]
+        async with condition:
+            condition.notify_all()
+
+    async def append_protocol_trace(
+        self, value: ProtocolTransaction | ProtocolFrameTrace
+    ) -> None:
+        if isinstance(value, ProtocolTransaction):
+            await self.repo.upsert_protocol_transaction(value)
+            run_id = value.run_id
+        else:
+            await self.repo.add_protocol_frame(value)
+            transaction = await self.repo.get_protocol_transaction(value.transaction_id)
+            if not transaction:
+                return
+            run_id = transaction.run_id
+        condition = self.protocol_conditions[run_id]
         async with condition:
             condition.notify_all()
 
@@ -281,6 +303,9 @@ class GroundState:
             clock=clock,
             fault=fault,
             seed=scenario.seed,
+            trace_sink=self.append_protocol_trace,
+            source_node=NodeKind.GROUND,
+            target_node=NodeKind.PLATFORM,
         )
         started = utc_now()
         result = await transport.send(
@@ -305,6 +330,7 @@ class GroundState:
             status=TransferStatus.COMPLETED,
             started_at=started,
             completed_at=utc_now(),
+            protocol_transaction_id=result.transfer_id,
         )
         await self.repo.add_transfer(record)
         return result, record
@@ -815,6 +841,77 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             raise HTTPException(404, "Mission not found.")
         return MissionDetail.model_validate(enrich_mission(mission))
 
+    @app.get("/api/missions/{mission_id}/nodes/{node}", response_model=NodeSnapshot)
+    async def get_node_snapshot(mission_id: str, node: NodeKind) -> NodeSnapshot:
+        mission = await state.repo.get_mission(mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found.")
+        if node == NodeKind.GROUND:
+            artifacts = [NodeArtifact(
+                key=item.id, name=item.name, level=item.level, mime_type=item.mime_type,
+                size_bytes=item.size_bytes, sha256=item.sha256, observation_only=False,
+                previewable=item.level in {ProductLevel.THUMBNAIL, ProductLevel.STAC,
+                                           ProductLevel.AI_RESULT},
+            ) for item in mission["products"] if item.artifact_path]
+            return NodeSnapshot(
+                node=node, mission_id=mission_id, status=str(mission["phase"]),
+                state={
+                    "phase": mission["phase"], "execution_state": mission["execution_state"],
+                    "downlinked_products": len(artifacts),
+                    "last_event": mission["events"][-1].model_dump(mode="json")
+                    if mission["events"] else None,
+                }, artifacts=artifacts,
+            )
+        base = (
+            app_settings.gpu_http_url if node == NodeKind.GPU else app_settings.platform_http_url
+        )
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                response = await client.get(
+                    f"{base}/internal/missions/{mission_id}/nodes/{node.value}"
+                )
+                response.raise_for_status()
+            return NodeSnapshot.model_validate(response.json())
+        except Exception as exc:
+            return NodeSnapshot(
+                node=node, mission_id=mission_id, reachable=False, status="unavailable",
+                observation_notice="节点当前不可达；地面任务控制仍可使用。",
+                state={"reason": state.platform_error(exc)},
+            )
+
+    @app.get("/api/missions/{mission_id}/nodes/{node}/artifacts/{key}")
+    async def get_node_artifact(mission_id: str, node: NodeKind, key: str):
+        if node == NodeKind.GROUND:
+            manifest = await state.repo.get_product(key)
+            if not manifest or manifest.mission_id != mission_id or not manifest.artifact_path:
+                raise HTTPException(404, "Artifact not found.")
+            path = Path(manifest.artifact_path).resolve()
+            if not path.is_file() or state.artifact_dir.resolve() not in path.parents:
+                raise HTTPException(404, "Artifact not found.")
+            return FileResponse(path, media_type=manifest.mime_type, filename=manifest.name)
+        base = (
+            app_settings.gpu_http_url if node == NodeKind.GPU else app_settings.platform_http_url
+        )
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{base}/internal/missions/{mission_id}/nodes/{node.value}/artifacts/{key}"
+                )
+                response.raise_for_status()
+            headers = {"Content-Disposition": response.headers.get(
+                "Content-Disposition", f'attachment; filename="{key}"'
+            )}
+            from fastapi.responses import Response
+            return Response(
+                response.content,
+                media_type=response.headers.get("Content-Type", "application/octet-stream"),
+                headers=headers,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                404, f"Observation artifact unavailable: {state.platform_error(exc)}"
+            ) from exc
+
     @app.get("/api/missions/{mission_id}/result")
     async def get_mission_result(mission_id: str) -> dict[str, Any]:
         mission = await state.repo.get_mission(mission_id)
@@ -861,6 +958,78 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     @app.get("/api/transfers")
     async def list_transfers(run_id: str | None = None) -> list[TransferRecord]:
         return await state.repo.list_transfers(run_id)
+
+    @app.post("/internal/observation/protocol", include_in_schema=False)
+    async def ingest_protocol_trace(body: dict[str, Any]) -> dict[str, bool]:
+        if body.get("kind") == "transaction":
+            value: ProtocolTransaction | ProtocolFrameTrace = ProtocolTransaction.model_validate(
+                body.get("value")
+            )
+        elif body.get("kind") == "frame":
+            value = ProtocolFrameTrace.model_validate(body.get("value"))
+        else:
+            raise HTTPException(400, "unknown trace kind")
+        await state.append_protocol_trace(value)
+        return {"stored": True}
+
+    @app.get(
+        "/api/missions/{mission_id}/protocol/transactions",
+        response_model=list[ProtocolTransaction],
+    )
+    async def list_protocol_transactions(mission_id: str) -> list[ProtocolTransaction]:
+        if not await state.repo.get_mission(mission_id):
+            raise HTTPException(404, "Mission not found.")
+        return await state.repo.list_protocol_transactions(mission_id)
+
+    @app.get("/api/protocol/transactions/{transaction_id}", response_model=ProtocolTransaction)
+    async def get_protocol_transaction(transaction_id: str) -> ProtocolTransaction:
+        value = await state.repo.get_protocol_transaction(transaction_id)
+        if not value:
+            raise HTTPException(404, "Protocol transaction not found.")
+        return value
+
+    @app.get(
+        "/api/protocol/transactions/{transaction_id}/frames",
+        response_model=list[ProtocolFrameTrace],
+    )
+    async def get_protocol_frames(transaction_id: str) -> list[ProtocolFrameTrace]:
+        if not await state.repo.get_protocol_transaction(transaction_id):
+            raise HTTPException(404, "Protocol transaction not found.")
+        return await state.repo.list_protocol_frames(transaction_id)
+
+    @app.get("/api/protocol/stream")
+    async def stream_protocol(run_id: str):
+        async def generate():
+            known: dict[str, str] = {}
+            known_frames: set[str] = set()
+            while True:
+                missions = await state.repo.list_missions()
+                mission_ids = [item["command"].id for item in missions
+                               if item["command"].run_id == run_id]
+                for mission_id in mission_ids:
+                    for transaction in reversed(
+                        await state.repo.list_protocol_transactions(mission_id)
+                    ):
+                        serialized = transaction.model_dump_json()
+                        if known.get(transaction.id) != serialized:
+                            known[transaction.id] = serialized
+                            yield {"event": "protocol", "data": serialized}
+                        for frame in await state.repo.list_protocol_frames(transaction.id):
+                            if frame.id not in known_frames:
+                                known_frames.add(frame.id)
+                                yield {
+                                    "event": "protocol_frame",
+                                    "data": frame.model_dump_json(),
+                                }
+                try:
+                    async with state.protocol_conditions[run_id]:
+                        await asyncio.wait_for(
+                            state.protocol_conditions[run_id].wait(), timeout=10
+                        )
+                except TimeoutError:
+                    yield {"event": "keepalive", "data": json.dumps({"count": len(known)})}
+
+        return EventSourceResponse(generate())
 
     @app.get("/api/products/{product_id}/manifest")
     async def get_product_manifest(product_id: str):

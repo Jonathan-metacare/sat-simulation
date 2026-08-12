@@ -25,6 +25,8 @@ from sat_simulation.common.models import (
     MissionStatus,
     MissionStepAttempt,
     ProductManifest,
+    ProtocolFrameTrace,
+    ProtocolTransaction,
     ScenarioConfig,
     SimulationClockState,
     TelemetryEvent,
@@ -116,7 +118,30 @@ class TransferRow(Base):
     run_id: Mapped[str] = mapped_column(String(80), index=True)
     mission_id: Mapped[str] = mapped_column(String(80), index=True)
     link: Mapped[str] = mapped_column(String(30), index=True)
+    protocol_transaction_id: Mapped[str | None] = mapped_column(
+        String(80), nullable=True, index=True
+    )
     record_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ProtocolTransactionRow(Base):
+    __tablename__ = "simulation_protocol_transactions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(80), index=True)
+    mission_id: Mapped[str] = mapped_column(String(80), index=True)
+    link: Mapped[str] = mapped_column(String(30), index=True)
+    message_type: Mapped[str] = mapped_column(String(50), index=True)
+    transaction_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ProtocolFrameRow(Base):
+    __tablename__ = "simulation_protocol_frames"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    transaction_id: Mapped[str] = mapped_column(String(80), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    frame_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
@@ -552,9 +577,71 @@ class Repository:
                     run_id=record.run_id,
                     mission_id=record.mission_id,
                     link=record.link,
+                    protocol_transaction_id=record.protocol_transaction_id,
                     record_json=record.model_dump_json(),
                 )
             )
+
+    async def upsert_protocol_transaction(self, transaction: ProtocolTransaction) -> None:
+        async with self.session() as session:
+            row = await session.get(ProtocolTransactionRow, transaction.id)
+            if row:
+                row.transaction_json = transaction.model_dump_json()
+                row.link = transaction.link
+                row.message_type = transaction.message_type
+            else:
+                session.add(
+                    ProtocolTransactionRow(
+                        id=transaction.id,
+                        run_id=transaction.run_id,
+                        mission_id=transaction.mission_id,
+                        link=transaction.link,
+                        message_type=transaction.message_type,
+                        transaction_json=transaction.model_dump_json(),
+                    )
+                )
+
+    async def add_protocol_frame(self, frame: ProtocolFrameTrace) -> None:
+        async with self.session() as session:
+            row = await session.get(ProtocolFrameRow, frame.id)
+            if row:
+                row.frame_json = frame.model_dump_json()
+            else:
+                session.add(
+                    ProtocolFrameRow(
+                        id=frame.id,
+                        transaction_id=frame.transaction_id,
+                        sequence=frame.sequence,
+                        frame_json=frame.model_dump_json(),
+                    )
+                )
+
+    async def get_protocol_transaction(self, transaction_id: str) -> ProtocolTransaction | None:
+        async with self.session() as session:
+            row = await session.get(ProtocolTransactionRow, transaction_id)
+            return ProtocolTransaction.model_validate_json(row.transaction_json) if row else None
+
+    async def list_protocol_transactions(self, mission_id: str) -> list[ProtocolTransaction]:
+        async with self.session() as session:
+            rows = (
+                await session.scalars(
+                    select(ProtocolTransactionRow)
+                    .where(ProtocolTransactionRow.mission_id == mission_id)
+                    .order_by(ProtocolTransactionRow.created_at.desc())
+                )
+            ).all()
+            return [ProtocolTransaction.model_validate_json(row.transaction_json) for row in rows]
+
+    async def list_protocol_frames(self, transaction_id: str) -> list[ProtocolFrameTrace]:
+        async with self.session() as session:
+            rows = (
+                await session.scalars(
+                    select(ProtocolFrameRow)
+                    .where(ProtocolFrameRow.transaction_id == transaction_id)
+                    .order_by(ProtocolFrameRow.created_at, ProtocolFrameRow.sequence)
+                )
+            ).all()
+            return [ProtocolFrameTrace.model_validate_json(row.frame_json) for row in rows]
 
     async def list_transfers(self, run_id: str | None = None) -> list[TransferRecord]:
         async with self.session() as session:

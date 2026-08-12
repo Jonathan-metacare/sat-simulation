@@ -35,6 +35,10 @@ docker compose up --build
 - 地面站：<http://localhost:3000>
 - Ground OpenAPI：<http://localhost:8000/docs>
 
+Web 使用 `?tab=ground|platform|optical|gpu` 切换地面站、星务平台、光学载荷和
+GPU Payload。只有地面站页提供任务控制；其他节点页属于仿真观察平面，下载的
+节点本地文件会明确标记为“未通过星地下传”。
+
 界面首次加载会创建暂停的默认场景。点击“新建观测任务”选择 YOLO 或 LLM 后，
 系统只规划窗口并停在 `initialized`；随后连续六次点击主“单步”按钮，每次只推进
 一个宏阶段并自动暂停。可以在对应阶段前注入确定性链路故障。
@@ -50,9 +54,9 @@ uv run alembic upgrade head
 按顺序启动四个终端：
 
 ```bash
-SAT_SIM_DATA_DIR=runtime-data/gpu uv run uvicorn sat_simulation.services.gpu:app --port 8002
-SAT_SIM_DATA_DIR=runtime-data/ground SAT_SIM_PLATFORM_UPLINK_HOST=127.0.0.1 SAT_SIM_PLATFORM_HTTP_URL=http://127.0.0.1:8001 uv run uvicorn sat_simulation.services.ground:app --port 8000
-SAT_SIM_DATA_DIR=runtime-data/platform SAT_SIM_GROUND_DOWNLINK_HOST=127.0.0.1 SAT_SIM_GPU_GTX_HOST=127.0.0.1 uv run uvicorn sat_simulation.services.platform:app --port 8001
+SAT_SIM_DATA_DIR=runtime-data/gpu SAT_SIM_GROUND_HTTP_URL=http://127.0.0.1:8000 uv run uvicorn sat_simulation.services.gpu:app --port 8002
+SAT_SIM_DATA_DIR=runtime-data/ground SAT_SIM_PLATFORM_UPLINK_HOST=127.0.0.1 SAT_SIM_PLATFORM_HTTP_URL=http://127.0.0.1:8001 SAT_SIM_GPU_HTTP_URL=http://127.0.0.1:8002 uv run uvicorn sat_simulation.services.ground:app --port 8000
+SAT_SIM_DATA_DIR=runtime-data/platform SAT_SIM_GROUND_DOWNLINK_HOST=127.0.0.1 SAT_SIM_GROUND_HTTP_URL=http://127.0.0.1:8000 SAT_SIM_GPU_GTX_HOST=127.0.0.1 uv run uvicorn sat_simulation.services.platform:app --port 8001
 cd web && pnpm dev
 ```
 
@@ -75,6 +79,9 @@ uv run python scripts/demo_mission.py
 - `GET /api/transfers`：GTX、上行和下行事务。
 - `GET /api/products/{id}/manifest`、`GET /api/artifacts/{id}`：地面产品。
 - `GET /api/events/stream?run_id=...`：SSE 事件流。
+- `GET /api/missions/{id}/nodes/{node}`：节点调试快照与本地文件目录。
+- `GET /api/missions/{id}/protocol/transactions`：协议事务、正文摘要和帧追踪。
+- `GET /api/protocol/stream?run_id=...`：实时协议事务与帧 SSE。
 
 OpenAPI 类型可重复生成：
 

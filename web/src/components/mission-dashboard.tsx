@@ -12,8 +12,10 @@ import {
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
 import { useDashboardStore } from "~/lib/store";
 import type {
-  AIMode, MissionPhase, MissionResultResponse, OrbitTrack, ProductManifest, PublicConfig
+  AIMode, MissionPhase, MissionResultResponse, NodeKind, OrbitTrack, ProductManifest, PublicConfig
 } from "~/lib/types";
+import { NodeTab } from "./node-tab";
+import { ProtocolInspector } from "./protocol-inspector";
 import { OrbitGlobe } from "./orbit-globe";
 import { SystemTopology } from "./system-topology";
 
@@ -57,6 +59,7 @@ export function MissionDashboard() {
   const [analysisPrompt, setAnalysisPrompt] = useState("识别图像中的主要地物、目标和异常，说明判断依据与不确定性。");
   const [missionResult, setMissionResult] = useState<MissionResultResponse>();
   const [playbackSpeed, setPlaybackSpeed] = useState<1 | 2 | 5>(1);
+  const [activeTab, setActiveTab] = useState<NodeKind>("ground");
   const missionId = mission?.command.id;
   const runId = mission?.command.run_id;
   const scenarioId = scenario?.config.id;
@@ -89,6 +92,16 @@ export function MissionDashboard() {
   }, [mission?.command.id, setMission, setScenario]);
 
   useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    const readTab = () => {
+      const value = new URLSearchParams(window.location.search).get("tab");
+      setActiveTab(["ground", "platform", "optical", "gpu"].includes(value ?? "")
+        ? value as NodeKind : "ground");
+    };
+    readTab();
+    window.addEventListener("popstate", readTab);
+    return () => window.removeEventListener("popstate", readTab);
+  }, []);
   useEffect(() => {
     if (!scenario) return;
     const timer = window.setInterval(async () => {
@@ -161,6 +174,12 @@ export function MissionDashboard() {
     );
     setMission(await api.mission(mission.command.id));
   });
+  const navigateTab = (tab: NodeKind) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", tab);
+    window.history.pushState({}, "", url);
+    setActiveTab(tab);
+  };
 
   const stageIndex = Math.max(0, stages.findIndex(([key]) => key === mission?.phase));
   const products = mission?.products ?? [];
@@ -205,11 +224,27 @@ export function MissionDashboard() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="status-pulse mr-2 text-xs text-emerald-200">SIL ONLINE · v{config?.version}</span>
           <Button onClick={() => void reload()}><RefreshCw size={14} />刷新</Button>
-          <Button onClick={() => setCreateOpen(true)} active disabled={working || !scenario || mission?.execution_state === "running"}><Zap size={14} />新建观测任务</Button>
+          {activeTab === "ground" && <Button onClick={() => setCreateOpen(true)} active disabled={working || !scenario || mission?.execution_state === "running"}><Zap size={14} />新建观测任务</Button>}
         </div>
       </header>
 
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
+
+      <nav className="panel mb-4 flex overflow-x-auto rounded-2xl p-1.5" aria-label="节点页面">
+        {(["ground", "platform", "optical", "gpu"] as NodeKind[]).map((tab) => <button key={tab} onClick={() => navigateTab(tab)} className={`min-w-32 flex-1 rounded-xl px-4 py-3 text-xs transition ${activeTab === tab ? "bg-cyan-300/12 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(81,229,255,.25)]" : "text-slate-500 hover:bg-white/[.035] hover:text-slate-300"}`}>{tab === "ground" ? "地面站" : tab === "platform" ? "星务平台" : tab === "optical" ? "光学载荷" : "GPU Payload"}</button>)}
+      </nav>
+
+      <section className="panel mb-4 rounded-2xl p-2"><SystemTopology onNavigate={navigateTab} mission={mission ? {
+        phase: mission.phase,
+        executionState: mission.execution_state,
+        activeSubstage: mission.active_substage,
+        aiMode: mission.ai_mode,
+        providerStatus: mission.ai_mode === "llm"
+          ? providerHealth.language?.status
+          : providerHealth.detection?.status,
+      } : undefined} /></section>
+
+      {activeTab === "ground" ? <>
 
       <section className="mb-4 grid items-start gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,1fr)]">
         <div className="panel min-w-0 overflow-hidden rounded-2xl">
@@ -267,16 +302,6 @@ export function MissionDashboard() {
         </div>
       </section>
 
-      <section className="panel mb-4 rounded-2xl p-2"><SystemTopology mission={mission ? {
-        phase: mission.phase,
-        executionState: mission.execution_state,
-        activeSubstage: mission.active_substage,
-        aiMode: mission.ai_mode,
-        providerStatus: mission.ai_mode === "llm"
-          ? providerHealth.language?.status
-          : providerHealth.detection?.status,
-      } : undefined} /></section>
-
       <section className="mb-4 grid gap-4 xl:grid-cols-[1.45fr_1fr]">
         <div className="panel rounded-2xl p-4">
           <div className="mb-4 flex items-center justify-between"><Title icon={<Activity size={16} />} text="任务时序" /><span className={`rounded-full border px-2.5 py-1 text-[10px] ${mission?.execution_state === "blocked" ? "border-orange-400/30 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{mission ? `${mission.phase} · ${mission.execution_state}` : "等待任务"}</span></div>
@@ -327,6 +352,8 @@ export function MissionDashboard() {
         </div>
       </section>
 
+      <div className="mt-4"><ProtocolInspector missionId={mission?.command.id} runId={mission?.command.run_id} node="ground" /></div>
+
       {createOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
         <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
           <div className="mb-1 text-lg font-medium text-slate-50">新建观测任务</div>
@@ -343,6 +370,7 @@ export function MissionDashboard() {
           <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>取消</Button><Button onClick={createMission} active disabled={working}>{working ? "初始化中" : mission && !["completed", "cancelled"].includes(mission.execution_state) ? "结束当前任务并新建" : "初始化任务"}</Button></div>
         </div>
       </div>}
+      </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} />}
     </main>
   );
 }

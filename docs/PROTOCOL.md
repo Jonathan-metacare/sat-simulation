@@ -20,3 +20,10 @@ project does not claim standards conformance.
 Fault rules are applied with a scenario seed and support drop, corruption,
 duplication, reordering, disconnection and added latency. Queue capacity and
 bandwidth are enforced before and during transfer.
+
+The observation plane persists transaction summaries and bounded frame traces.
+JSON application bodies are formatted after recursive redaction of keys matching
+`key/token/secret/auth/password`. Binary ProductEnvelope bodies retain only MIME,
+size, SHA-256, manifest and member inventory; complete hex payloads are never stored.
+The in-process optical subsystem uses a separate logical `PayloadDriver/1` bus with
+`CAPTURE_REQUEST` and `RAW_PACKET`; it is not represented as TCP or GTX.
