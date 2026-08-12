@@ -8,7 +8,6 @@ import { Cpu, Database, Download, FileImage, Satellite, ScanLine, ShieldCheck } 
 
 import { api, nodeArtifactURL } from "~/lib/api";
 import type { MissionDetail, NodeArtifact, NodeKind, NodeSnapshot } from "~/lib/types";
-import { ProtocolInspector } from "./protocol-inspector";
 
 const titles: Record<Exclude<NodeKind, "ground">, { title: string; subtitle: string }> = {
   platform: { title: "星务平台", subtitle: "任务状态机 · 姿态控制 · 星上存储 · 载荷与 GTX 总线" },
@@ -58,7 +57,6 @@ export function NodeTab({ node, mission, providerHealth }: {
         {node === "gpu" && aiResult?.result?.content && <div className="mt-4 rounded-xl border border-cyan-300/10 bg-black/20 p-4"><div className="mb-2 text-xs text-cyan-100">GPU 本地模型结果</div><div className="llm-markdown max-h-96 overflow-auto"><ReactMarkdown remarkPlugins={[remarkGfm]}>{aiResult.result.content}</ReactMarkdown></div></div>}
       </div>
     </section>
-    <ProtocolInspector missionId={mission?.command.id} runId={mission?.command.run_id} node={node} />
   </div>;
 }
 

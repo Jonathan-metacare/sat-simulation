@@ -5,8 +5,8 @@ import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Activity, AlertTriangle, Box, Clock3, Database, FileImage, Gauge,
-  LoaderCircle, Orbit, Radio, RefreshCw, ShieldCheck, StepForward, Zap
+  Activity, ActivitySquare, AlertTriangle, Box, Clock3, Database, FileImage, Gauge,
+  LoaderCircle, Orbit, Radio, ShieldCheck, StepForward, X, Zap
 } from "lucide-react";
 
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
@@ -60,6 +60,7 @@ export function MissionDashboard() {
   const [missionResult, setMissionResult] = useState<MissionResultResponse>();
   const [playbackSpeed, setPlaybackSpeed] = useState<1 | 2 | 5>(1);
   const [activeTab, setActiveTab] = useState<NodeKind>("ground");
+  const [missionPanelOpen, setMissionPanelOpen] = useState(false);
   const missionId = mission?.command.id;
   const runId = mission?.command.run_id;
   const scenarioId = scenario?.config.id;
@@ -223,26 +224,65 @@ export function MissionDashboard() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="status-pulse mr-2 text-xs text-emerald-200">SIL ONLINE · v{config?.version}</span>
-          <Button onClick={() => void reload()}><RefreshCw size={14} />刷新</Button>
-          {activeTab === "ground" && <Button onClick={() => setCreateOpen(true)} active disabled={working || !scenario || mission?.execution_state === "running"}><Zap size={14} />新建观测任务</Button>}
+          <Button onClick={() => setMissionPanelOpen(true)} active><ActivitySquare size={14} />任务面板</Button>
         </div>
       </header>
 
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
+      {missionPanelOpen && <div className="fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-[1px]" onClick={() => setMissionPanelOpen(false)} aria-hidden="true" />}
+      <aside aria-label="任务控制面板" className={`fixed inset-y-0 right-0 z-50 flex w-full max-w-4xl flex-col border-l border-cyan-300/20 bg-[#041521]/[.98] shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
+        <div className="flex items-center justify-between border-b border-cyan-200/10 px-5 py-4">
+          <div><div className="text-sm font-medium text-cyan-100">Mission Control Panel</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">任务指示器 · 控制 · 协议观察</div></div>
+          <Button onClick={() => setMissionPanelOpen(false)}><X size={15} />关闭</Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <section className="panel mb-4 rounded-2xl p-2"><SystemTopology onNavigate={(node) => { navigateTab(node); setMissionPanelOpen(false); }} mission={mission ? {
+          phase: mission.phase,
+          executionState: mission.execution_state,
+          activeSubstage: mission.active_substage,
+          aiMode: mission.ai_mode,
+          providerStatus: mission.ai_mode === "llm"
+            ? providerHealth.language?.status
+            : providerHealth.detection?.status,
+        } : undefined} /></section>
+
+      <section className="panel mb-4 rounded-2xl p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/[.06] pb-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Title icon={<Clock3 size={16} />} text="任务控制" />
+            <span className="font-mono text-xs text-cyan-100">{scenario ? new Date(scenario.clock.simulated_at).toLocaleString("zh-CN", { hour12: false }) : "--"}</span>
+            <span className={`rounded border px-2 py-1 text-[10px] ${scenario?.clock.paused ? "border-emerald-300/20 text-emerald-300" : "border-orange-300/20 text-orange-300"}`}>{scenario?.clock.paused ? "仿真已暂停" : "仿真运行中"}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {([1, 2, 5] as const).map((rate) => <Button key={rate} onClick={() => setPlaybackSpeed(rate)} active={playbackSpeed === rate}>{rate}x</Button>)}
+            <Button onClick={() => setCreateOpen(true)} disabled={working || !scenario || mission?.execution_state === "running"}><Zap size={14} />新建任务</Button>
+            <Button onClick={advanceMission} active disabled={!mission?.can_advance || mission?.execution_state === "running" || working}>
+              {mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}
+              {mission?.execution_state === "running" ? "阶段执行中" : (mission?.next_action ?? "请先新建任务")}
+            </Button>
+          </div>
+        </div>
+        <div className="mb-4 flex items-center justify-between gap-3"><Title icon={<Activity size={16} />} text="任务时序" /><span className={`rounded-full border px-2.5 py-1 text-[10px] ${mission?.execution_state === "blocked" ? "border-orange-400/30 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{mission ? `${mission.phase} · ${mission.execution_state}` : "等待任务"}</span></div>
+        <div className="overflow-x-auto pb-2"><div className="flex min-w-[700px] items-start">{stages.map(([key, label], index) => <Stage key={key} label={label} complete={mission?.phase === "completed" || index < stageIndex} active={key === mission?.phase} last={index === stages.length - 1} />)}</div></div>
+        {mission?.planned_windows && <div className="mt-4 grid gap-2 border-t border-white/[.05] pt-4 sm:grid-cols-3">
+          <Metric label="上注窗口 AOS" value={new Date(mission.planned_windows.uplink.aos).toLocaleString("zh-CN", { hour12: false })} />
+          <Metric label="自动拍摄时刻" value={new Date(mission.planned_windows.capture.max_elevation_at).toLocaleString("zh-CN", { hour12: false })} />
+          <Metric label="结果下传 AOS" value={new Date(mission.planned_windows.downlink.aos).toLocaleString("zh-CN", { hour12: false })} />
+        </div>}
+        {mission?.execution_state === "blocked" && <p className="mt-3 text-xs leading-5 text-orange-200">{mission.block_reason}</p>}
+        {mission?.execution_state === "retryable_error" && <p className="mt-3 text-xs leading-5 text-red-300">可重试：{mission.error}</p>}
+        <div ref={eventListRef} className="mt-4 max-h-56 space-y-2 overflow-auto border-t border-white/[.05] pt-4">
+          {visibleEvents.length ? [...visibleEvents].reverse().map((event) => <div key={event.id} className={`grid grid-cols-[72px_1fr] gap-3 rounded-lg px-2 py-1.5 text-xs ${["macro_phase_blocked", "macro_phase_failed"].includes(event.event_type) ? "bg-orange-400/[.06]" : ""}`}><span className="font-mono text-slate-600">{new Date(event.simulated_at).toLocaleTimeString("zh-CN", { hour12: false })}</span><div><div className="text-slate-300">{event.message}</div><div className="mt-0.5 text-[10px] text-slate-600">{event.source} · {event.channel} · {event.event_type}</div></div></div>) : <Empty text="创建任务后，这里将显示逐阶段事件。" />}
+        </div>
+      </section>
+      <ProtocolInspector missionId={mission?.command.id} runId={mission?.command.run_id} />
+      </div>
+      </aside>
+
       <nav className="panel mb-4 flex overflow-x-auto rounded-2xl p-1.5" aria-label="节点页面">
         {(["ground", "platform", "optical", "gpu"] as NodeKind[]).map((tab) => <button key={tab} onClick={() => navigateTab(tab)} className={`min-w-32 flex-1 rounded-xl px-4 py-3 text-xs transition ${activeTab === tab ? "bg-cyan-300/12 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(81,229,255,.25)]" : "text-slate-500 hover:bg-white/[.035] hover:text-slate-300"}`}>{tab === "ground" ? "地面站" : tab === "platform" ? "星务平台" : tab === "optical" ? "光学载荷" : "GPU Payload"}</button>)}
       </nav>
-
-      <section className="panel mb-4 rounded-2xl p-2"><SystemTopology onNavigate={navigateTab} mission={mission ? {
-        phase: mission.phase,
-        executionState: mission.execution_state,
-        activeSubstage: mission.active_substage,
-        aiMode: mission.ai_mode,
-        providerStatus: mission.ai_mode === "llm"
-          ? providerHealth.language?.status
-          : providerHealth.detection?.status,
-      } : undefined} /></section>
 
       {activeTab === "ground" ? <>
 
@@ -266,21 +306,6 @@ export function MissionDashboard() {
         </div>
         <div className="space-y-4">
           <div className="panel rounded-2xl p-4">
-            <div className="mb-4 flex items-center justify-between"><Title icon={<Clock3 size={16} />} text="仿真时钟" /><span className="font-mono text-xs text-cyan-100">{scenario ? new Date(scenario.clock.simulated_at).toLocaleString("zh-CN", { hour12: false }) : "--"}</span></div>
-            <div className="mb-3 flex items-center justify-between rounded-lg border border-white/[.06] bg-black/15 px-3 py-2 text-xs">
-              <span className="text-slate-500">时钟状态</span>
-              <span className={scenario?.clock.paused ? "text-emerald-300" : "text-orange-300"}>{scenario?.clock.paused ? "已暂停" : "运行中"}</span>
-            </div>
-            <div className="mb-3 flex gap-2">{([1, 2, 5] as const).map((rate) => <Button key={rate} onClick={() => setPlaybackSpeed(rate)} active={playbackSpeed === rate}>{rate}x</Button>)}</div>
-            <Button onClick={advanceMission} active disabled={!mission?.can_advance || mission?.execution_state === "running" || working}>
-              {mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}
-              {mission?.execution_state === "running" ? "阶段执行中" : (mission?.next_action ?? "请先新建任务")}
-            </Button>
-            {mission?.execution_state === "blocked" && <p className="mt-3 text-xs leading-5 text-orange-200">{mission.block_reason}</p>}
-            {mission?.execution_state === "retryable_error" && <p className="mt-3 text-xs leading-5 text-red-300">可重试：{mission.error}</p>}
-          </div>
-
-          <div className="panel rounded-2xl p-4">
             <div className="mb-3 flex items-center justify-between"><Title icon={<Gauge size={16} />} text="轨姿遥测" /><span className="text-[10px] text-emerald-300">{spacecraft?.in_contact === false ? "不可见" : "窗口开放"}</span></div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <Metric label="纬度" value={`${Number(spacecraft?.latitude ?? 0).toFixed(3)}°`} />
@@ -302,20 +327,7 @@ export function MissionDashboard() {
         </div>
       </section>
 
-      <section className="mb-4 grid gap-4 xl:grid-cols-[1.45fr_1fr]">
-        <div className="panel rounded-2xl p-4">
-          <div className="mb-4 flex items-center justify-between"><Title icon={<Activity size={16} />} text="任务时序" /><span className={`rounded-full border px-2.5 py-1 text-[10px] ${mission?.execution_state === "blocked" ? "border-orange-400/30 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{mission ? `${mission.phase} · ${mission.execution_state}` : "等待任务"}</span></div>
-          <div className="overflow-x-auto pb-2"><div className="flex min-w-[700px] items-start">{stages.map(([key, label], index) => <Stage key={key} label={label} complete={mission?.phase === "completed" || index < stageIndex} active={key === mission?.phase} last={index === stages.length - 1} />)}</div></div>
-          {mission?.planned_windows && <div className="mt-4 grid gap-2 border-t border-white/[.05] pt-4 sm:grid-cols-3">
-            <Metric label="上注窗口 AOS" value={new Date(mission.planned_windows.uplink.aos).toLocaleString("zh-CN", { hour12: false })} />
-            <Metric label="自动拍摄时刻" value={new Date(mission.planned_windows.capture.max_elevation_at).toLocaleString("zh-CN", { hour12: false })} />
-            <Metric label="结果下传 AOS" value={new Date(mission.planned_windows.downlink.aos).toLocaleString("zh-CN", { hour12: false })} />
-          </div>}
-          <div ref={eventListRef} className="mt-5 max-h-72 space-y-2 overflow-auto border-t border-white/[.05] pt-4">
-            {visibleEvents.length ? [...visibleEvents].reverse().map((event) => <div key={event.id} className={`grid grid-cols-[72px_1fr] gap-3 rounded-lg px-2 py-1.5 text-xs ${["macro_phase_blocked", "macro_phase_failed"].includes(event.event_type) ? "bg-orange-400/[.06]" : ""}`}><span className="font-mono text-slate-600">{new Date(event.simulated_at).toLocaleTimeString("zh-CN", { hour12: false })}</span><div><div className="text-slate-300">{event.message}</div><div className="mt-0.5 text-[10px] text-slate-600">{event.source} · {event.channel} · {event.event_type}</div></div></div>) : <Empty text="创建任务后，这里将显示逐阶段事件。" />}
-          </div>
-        </div>
-
+      <section className="mb-4">
         <div className="panel rounded-2xl p-4">
           <div className="mb-4 flex items-center justify-between"><Title icon={<Radio size={16} />} text="链路状态" /><span className="text-[10px] text-slate-500">CRC32C + SHA-256</span></div>
           <div className="space-y-3">
@@ -351,8 +363,6 @@ export function MissionDashboard() {
           </div>
         </div>
       </section>
-
-      <div className="mt-4"><ProtocolInspector missionId={mission?.command.id} runId={mission?.command.run_id} node="ground" /></div>
 
       {createOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
         <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">

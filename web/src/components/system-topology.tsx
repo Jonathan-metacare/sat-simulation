@@ -94,14 +94,14 @@ export function SystemTopology({ mission, onNavigate }: { mission?: TopologyMiss
   const active = mission?.activeSubstage;
   const provider = mission?.providerStatus?.toUpperCase() ?? "UNKNOWN";
 
-  return <div className="overflow-x-auto px-2 py-1">
-    <div className="relative min-w-[760px]">
+  return <div className="px-1 py-1">
+    <div className="relative w-full">
       <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 1000 124" preserveAspectRatio="none" aria-hidden="true">
         <FlowPath d="M 96 62 H 452" label={flows.uplink.label} state={flows.uplink.state} reverse={active === "downlink"} />
         <FlowPath d="M 548 62 H 600 L 640 28 H 904" label={flows.payload.label} state={flows.payload.state} />
         <FlowPath d="M 548 62 H 600 L 640 96 H 904" label={flows.gtx.label} state={flows.gtx.state} reverse={active === "ai"} />
       </svg>
-      <div className="relative grid h-[124px] grid-cols-[96px_minmax(80px,1fr)_96px_minmax(80px,1fr)_96px] grid-rows-2 items-center">
+      <div className="relative grid h-[124px] grid-cols-[88px_minmax(32px,1fr)_88px_minmax(32px,1fr)_88px] grid-rows-2 items-center">
       <div className="row-span-2 flex justify-center">
         <Node
           icon={<RadioTower size={18} />}
@@ -146,7 +146,7 @@ export function SystemTopology({ mission, onNavigate }: { mission?: TopologyMiss
       <span className={`absolute left-[76%] top-[96px] -translate-x-1/2 translate-y-3 text-[8px] tracking-wider ${flows.gtx.state === "active" ? "text-cyan-200" : "text-slate-500"}`}>{flows.gtx.label}</span>
       </div>
     </div>
-    <div className="mt-1 flex min-w-[760px] justify-between px-[8%] text-[8px] tracking-wide text-slate-600">
+    <div className="mt-1 flex justify-between px-[5%] text-[8px] tracking-wide text-slate-600">
       <span>所有载荷链路均以星务平台为中心</span>
       <span className={flows.downlink.state === "active" ? "text-cyan-200" : ""}>
         {flows.downlink.state === "active" ? "结果请求已上注 · 结果包正在下传" : "光学载荷与 GPU 载荷无直连"}
