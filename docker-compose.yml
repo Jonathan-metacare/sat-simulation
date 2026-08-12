@@ -20,6 +20,8 @@ services:
     environment:
       SAT_SIM_DATA_DIR: /data
       SAT_SIM_GPU_GTX_PORT: 9101
+      SAT_SIM_PLATFORM_GTX_RESULT_HOST: platform-node
+      SAT_SIM_PLATFORM_GTX_RESULT_PORT: 9102
       SAT_SIM_YOLO_API_URL: ${SAT_SIM_YOLO_API_URL:-}
       SAT_SIM_LLM_API_URL: ${SAT_SIM_LLM_API_URL:-}
     volumes:
@@ -43,6 +45,7 @@ services:
       SAT_SIM_PLATFORM_UPLINK_HOST: platform-node
       SAT_SIM_PLATFORM_UPLINK_PORT: 9200
       SAT_SIM_PLATFORM_HTTP_URL: http://platform-node:8001
+      SAT_SIM_GPU_HTTP_URL: http://gpu-node:8002
     ports:
       - "8000:8000"
     expose: ["9201"]
@@ -70,9 +73,10 @@ services:
       SAT_SIM_GROUND_DOWNLINK_PORT: 9201
       SAT_SIM_GPU_GTX_HOST: gpu-node
       SAT_SIM_GPU_GTX_PORT: 9101
+      SAT_SIM_PLATFORM_GTX_RESULT_PORT: 9102
     volumes:
       - platform-data:/data
-    expose: ["8001", "9200"]
+    expose: ["8001", "9200", "9102"]
     depends_on:
       ground-api:
         condition: service_healthy

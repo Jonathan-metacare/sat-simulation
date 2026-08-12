@@ -45,6 +45,26 @@
         }
       }
     },
+    "/api/providers/health": {
+      "get": {
+        "summary": "Provider Health",
+        "operationId": "provider_health_api_providers_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Provider Health Api Providers Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/scenes/import": {
       "post": {
         "summary": "Import Scene",
@@ -258,8 +278,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/MissionSummary"
                   },
                   "type": "array",
                   "title": "Response List Missions Api Missions Get"
@@ -283,14 +302,102 @@
           "required": true
         },
         "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/missions/{mission_id}/advance": {
+      "post": {
+        "summary": "Advance Mission",
+        "operationId": "advance_mission_api_missions__mission_id__advance_post",
+        "parameters": [
+          {
+            "name": "mission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mission Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MissionAdvance"
+              }
+            }
+          }
+        },
+        "responses": {
           "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Create Mission Api Missions Post"
+                  "additionalProperties": true,
+                  "title": "Response Advance Mission Api Missions  Mission Id  Advance Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/missions/{mission_id}/cancel": {
+      "post": {
+        "summary": "Cancel Mission",
+        "operationId": "cancel_mission_api_missions__mission_id__cancel_post",
+        "parameters": [
+          {
+            "name": "mission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mission Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissionDetail"
                 }
               }
             }
@@ -329,9 +436,48 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/MissionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/missions/{mission_id}/result": {
+      "get": {
+        "summary": "Get Mission Result",
+        "operationId": "get_mission_result_api_missions__mission_id__result_get",
+        "parameters": [
+          {
+            "name": "mission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mission Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Mission Api Missions  Mission Id  Get"
+                  "title": "Response Get Mission Result Api Missions  Mission Id  Result Get"
                 }
               }
             }
@@ -654,6 +800,14 @@
   },
   "components": {
     "schemas": {
+      "AIMode": {
+        "type": "string",
+        "enum": [
+          "yolo",
+          "llm"
+        ],
+        "title": "AIMode"
+      },
       "Body_import_scene_api_scenes_import_post": {
         "properties": {
           "file": {
@@ -679,6 +833,49 @@
           "set_rate"
         ],
         "title": "ClockAction"
+      },
+      "ContactWindow": {
+        "properties": {
+          "aos": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Aos"
+          },
+          "los": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Los"
+          },
+          "max_elevation_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Max Elevation At"
+          },
+          "max_elevation_deg": {
+            "type": "number",
+            "title": "Max Elevation Deg"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aos",
+          "los",
+          "max_elevation_at",
+          "max_elevation_deg"
+        ],
+        "title": "ContactWindow"
+      },
+      "ExecutionState": {
+        "type": "string",
+        "enum": [
+          "waiting",
+          "running",
+          "blocked",
+          "retryable_error",
+          "completed",
+          "cancelled"
+        ],
+        "title": "ExecutionState"
       },
       "FaultRule": {
         "properties": {
@@ -760,6 +957,110 @@
         ],
         "title": "LinkKind"
       },
+      "MissionAdvance": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "minLength": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "playback_speed": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              5
+            ],
+            "title": "Playback Speed",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "title": "MissionAdvance"
+      },
+      "MissionCommand": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "scenario_id": {
+            "type": "string",
+            "title": "Scenario Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": "北京目标光学观测"
+          },
+          "target_name": {
+            "type": "string",
+            "title": "Target Name",
+            "default": "北京演示目标"
+          },
+          "target_latitude": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Target Latitude",
+            "default": 39.9042
+          },
+          "target_longitude": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Target Longitude",
+            "default": 116.4074
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "scene_id": {
+            "type": "string",
+            "title": "Scene Id",
+            "default": "demo-optical-scene"
+          },
+          "enable_ai": {
+            "type": "boolean",
+            "title": "Enable Ai",
+            "default": true
+          },
+          "ai_mode": {
+            "$ref": "#/components/schemas/AIMode",
+            "default": "yolo"
+          },
+          "planned_windows": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlannedWindows"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "scenario_id"
+        ],
+        "title": "MissionCommand"
+      },
       "MissionCreate": {
         "properties": {
           "scenario_id": {
@@ -799,6 +1100,10 @@
             "type": "boolean",
             "title": "Enable Ai",
             "default": true
+          },
+          "ai_mode": {
+            "$ref": "#/components/schemas/AIMode",
+            "default": "yolo"
           }
         },
         "type": "object",
@@ -806,6 +1111,492 @@
           "scenario_id"
         ],
         "title": "MissionCreate"
+      },
+      "MissionDetail": {
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/MissionCommand"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MissionStatus"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/MissionPhase"
+          },
+          "execution_state": {
+            "$ref": "#/components/schemas/ExecutionState"
+          },
+          "active_substage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Substage"
+          },
+          "ai_mode": {
+            "$ref": "#/components/schemas/AIMode"
+          },
+          "planned_windows": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlannedWindows"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "legacy_terminal": {
+            "type": "boolean",
+            "title": "Legacy Terminal",
+            "default": false
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action"
+          },
+          "can_advance": {
+            "type": "boolean",
+            "title": "Can Advance",
+            "default": false
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TelemetryEvent"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "products": {
+            "items": {
+              "$ref": "#/components/schemas/ProductManifest"
+            },
+            "type": "array",
+            "title": "Products"
+          },
+          "onboard_products": {
+            "items": {
+              "$ref": "#/components/schemas/ProductManifest"
+            },
+            "type": "array",
+            "title": "Onboard Products"
+          },
+          "transfers": {
+            "items": {
+              "$ref": "#/components/schemas/TransferRecord"
+            },
+            "type": "array",
+            "title": "Transfers"
+          },
+          "step_attempts": {
+            "items": {
+              "$ref": "#/components/schemas/MissionStepAttempt"
+            },
+            "type": "array",
+            "title": "Step Attempts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command",
+          "status",
+          "phase",
+          "execution_state",
+          "ai_mode",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MissionDetail"
+      },
+      "MissionPhase": {
+        "type": "string",
+        "enum": [
+          "initialized",
+          "uplink_complete",
+          "capture_complete",
+          "processing_complete",
+          "gtx_complete",
+          "ai_complete",
+          "completed"
+        ],
+        "title": "MissionPhase"
+      },
+      "MissionStatus": {
+        "type": "string",
+        "enum": [
+          "planned",
+          "uplinking",
+          "maneuvering",
+          "capturing",
+          "l0_processing",
+          "l1a_processing",
+          "l1b_processing",
+          "gtx_transfer",
+          "ai_processing",
+          "ai_skipped",
+          "downlinking",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "MissionStatus"
+      },
+      "MissionStepAttempt": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "mission_id": {
+            "type": "string",
+            "title": "Mission Id"
+          },
+          "from_phase": {
+            "$ref": "#/components/schemas/MissionPhase"
+          },
+          "target_phase": {
+            "$ref": "#/components/schemas/MissionPhase"
+          },
+          "attempt_number": {
+            "type": "integer",
+            "title": "Attempt Number"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ExecutionState",
+            "default": "running"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mission_id",
+          "from_phase",
+          "target_phase",
+          "attempt_number",
+          "idempotency_key"
+        ],
+        "title": "MissionStepAttempt"
+      },
+      "MissionSummary": {
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/MissionCommand"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MissionStatus"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/MissionPhase"
+          },
+          "execution_state": {
+            "$ref": "#/components/schemas/ExecutionState"
+          },
+          "active_substage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Substage"
+          },
+          "ai_mode": {
+            "$ref": "#/components/schemas/AIMode"
+          },
+          "planned_windows": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlannedWindows"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "legacy_terminal": {
+            "type": "boolean",
+            "title": "Legacy Terminal",
+            "default": false
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action"
+          },
+          "can_advance": {
+            "type": "boolean",
+            "title": "Can Advance",
+            "default": false
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command",
+          "status",
+          "phase",
+          "execution_state",
+          "ai_mode",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MissionSummary"
+      },
+      "PlannedWindows": {
+        "properties": {
+          "uplink": {
+            "$ref": "#/components/schemas/ContactWindow"
+          },
+          "capture": {
+            "$ref": "#/components/schemas/ContactWindow"
+          },
+          "downlink": {
+            "$ref": "#/components/schemas/ContactWindow"
+          },
+          "target_name": {
+            "type": "string",
+            "title": "Target Name"
+          },
+          "target_latitude": {
+            "type": "number",
+            "title": "Target Latitude"
+          },
+          "target_longitude": {
+            "type": "number",
+            "title": "Target Longitude"
+          },
+          "tle_line1": {
+            "type": "string",
+            "title": "Tle Line1"
+          },
+          "tle_line2": {
+            "type": "string",
+            "title": "Tle Line2"
+          },
+          "minimum_elevation_deg": {
+            "type": "number",
+            "title": "Minimum Elevation Deg",
+            "default": 5.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "uplink",
+          "capture",
+          "downlink",
+          "target_name",
+          "target_latitude",
+          "target_longitude",
+          "tle_line1",
+          "tle_line2"
+        ],
+        "title": "PlannedWindows"
+      },
+      "ProductLevel": {
+        "type": "string",
+        "enum": [
+          "raw",
+          "l0",
+          "l1a",
+          "l1b",
+          "thumbnail",
+          "stac",
+          "ai_result",
+          "result_package"
+        ],
+        "title": "ProductLevel"
+      },
+      "ProductManifest": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "mission_id": {
+            "type": "string",
+            "title": "Mission Id"
+          },
+          "level": {
+            "$ref": "#/components/schemas/ProductLevel"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "processing_parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Processing Parameters"
+          },
+          "quality": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Quality"
+          },
+          "lineage": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Lineage"
+          },
+          "artifact_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "mission_id",
+          "level",
+          "name",
+          "mime_type",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "ProductManifest"
       },
       "ScenarioConfig": {
         "properties": {
@@ -921,6 +1712,92 @@
           "action"
         ],
         "title": "ScenarioControl"
+      },
+      "TelemetryEvent": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "mission_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence",
+            "default": 0
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "simulated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Simulated At"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "derived",
+              "simulated",
+              "placeholder"
+            ],
+            "title": "Provenance",
+            "default": "simulated"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "simulation_control",
+              "uplink",
+              "gtx",
+              "downlink"
+            ],
+            "title": "Channel",
+            "default": "simulation_control"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "event_type",
+          "status",
+          "message",
+          "simulated_at",
+          "source"
+        ],
+        "title": "TelemetryEvent"
       },
       "TransferRecord": {
         "properties": {

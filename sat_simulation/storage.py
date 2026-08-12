@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import DateTime, Integer, String, Text, delete, select
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, delete, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,9 +17,13 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from sat_simulation.common.models import (
+    AIMode,
+    ExecutionState,
     FaultRule,
     MissionCommand,
+    MissionPhase,
     MissionStatus,
+    MissionStepAttempt,
     ProductManifest,
     ScenarioConfig,
     SimulationClockState,
@@ -56,8 +60,31 @@ class MissionRow(Base):
     status: Mapped[str] = mapped_column(String(40), index=True)
     command_json: Mapped[str] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phase: Mapped[str] = mapped_column(String(40), default=MissionPhase.INITIALIZED, index=True)
+    execution_state: Mapped[str] = mapped_column(
+        String(40), default=ExecutionState.WAITING, index=True
+    )
+    active_substage: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    ai_mode: Mapped[str] = mapped_column(String(20), default=AIMode.YOLO)
+    planned_windows_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    legacy_terminal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class MissionStepAttemptRow(Base):
+    __tablename__ = "simulation_mission_step_attempts"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(String(80), index=True)
+    from_phase: Mapped[str] = mapped_column(String(40))
+    target_phase: Mapped[str] = mapped_column(String(40))
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    state: Mapped[str] = mapped_column(String(40), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class EventRow(Base):
@@ -125,6 +152,34 @@ class Repository:
     async def close(self) -> None:
         await self.engine.dispose()
 
+    async def recover_running_missions(self) -> int:
+        """Make an interrupted macro step explicitly retryable after restart."""
+        recovered = 0
+        async with self.session() as session:
+            missions = (
+                await session.scalars(
+                    select(MissionRow).where(MissionRow.execution_state == ExecutionState.RUNNING)
+                )
+            ).all()
+            for mission in missions:
+                mission.execution_state = ExecutionState.RETRYABLE_ERROR
+                mission.active_substage = None
+                mission.error = "Ground 编排器重启中断了本步，请重试"
+                mission.updated_at = now_utc()
+                recovered += 1
+            attempts = (
+                await session.scalars(
+                    select(MissionStepAttemptRow).where(
+                        MissionStepAttemptRow.state == ExecutionState.RUNNING
+                    )
+                )
+            ).all()
+            for attempt in attempts:
+                attempt.state = ExecutionState.RETRYABLE_ERROR
+                attempt.error = "Ground 编排器重启中断了本步，请使用新幂等键重试"
+                attempt.finished_at = now_utc()
+        return recovered
+
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessions() as session:
@@ -186,6 +241,13 @@ class Repository:
             name=command.name,
             status=MissionStatus.PLANNED,
             command_json=command.model_dump_json(),
+            phase=MissionPhase.INITIALIZED,
+            execution_state=ExecutionState.WAITING,
+            ai_mode=command.ai_mode,
+            planned_windows_json=(
+                command.planned_windows.model_dump_json() if command.planned_windows else None
+            ),
+            legacy_terminal=False,
         )
         async with self.session() as session:
             session.add(row)
@@ -197,6 +259,150 @@ class Repository:
                 row.status = status
                 row.error = error
                 row.updated_at = now_utc()
+
+    async def active_mission_for_scenario(self, scenario_id: str) -> str | None:
+        async with self.session() as session:
+            return await session.scalar(
+                select(MissionRow.id)
+                .where(
+                    MissionRow.scenario_id == scenario_id,
+                    MissionRow.legacy_terminal.is_(False),
+                    MissionRow.execution_state.not_in(
+                        [ExecutionState.COMPLETED, ExecutionState.CANCELLED]
+                    ),
+                )
+                .limit(1)
+            )
+
+    async def cancel_mission(self, mission_id: str) -> None:
+        """End a paused mission without deleting its run, events, or products."""
+        async with self.session() as session:
+            row = await session.get(MissionRow, mission_id, with_for_update=True)
+            if not row:
+                raise KeyError(mission_id)
+            if row.execution_state == ExecutionState.RUNNING:
+                raise RuntimeError("任务阶段正在执行，不能结束；请等待本阶段停止")
+            if row.execution_state in {ExecutionState.COMPLETED, ExecutionState.CANCELLED}:
+                return
+            row.status = MissionStatus.CANCELLED
+            row.execution_state = ExecutionState.CANCELLED
+            row.active_substage = None
+            row.block_reason = None
+            row.error = "用户结束任务并重新初始化"
+            row.updated_at = now_utc()
+
+    async def begin_step(
+        self,
+        mission_id: str,
+        *,
+        target_phase: MissionPhase,
+        idempotency_key: str,
+        active_substage: str,
+    ) -> tuple[MissionStepAttempt, bool]:
+        async with self.session() as session:
+            existing = await session.scalar(
+                select(MissionStepAttemptRow).where(
+                    MissionStepAttemptRow.idempotency_key == idempotency_key
+                )
+            )
+            if existing:
+                return self._attempt_model(existing), True
+            row = await session.get(MissionRow, mission_id, with_for_update=True)
+            if not row:
+                raise KeyError(mission_id)
+            if row.legacy_terminal:
+                raise RuntimeError("旧版任务只读，不能继续推进")
+            if row.execution_state in {ExecutionState.COMPLETED, ExecutionState.CANCELLED}:
+                raise RuntimeError("任务已经结束，不能继续推进")
+            if row.execution_state == ExecutionState.RUNNING:
+                raise RuntimeError("任务已有正在执行的单步")
+            count = len(
+                (
+                    await session.scalars(
+                        select(MissionStepAttemptRow).where(
+                            MissionStepAttemptRow.mission_id == mission_id
+                        )
+                    )
+                ).all()
+            )
+            attempt = MissionStepAttempt(
+                mission_id=mission_id,
+                from_phase=MissionPhase(row.phase),
+                target_phase=target_phase,
+                attempt_number=count + 1,
+                idempotency_key=idempotency_key,
+            )
+            session.add(
+                MissionStepAttemptRow(
+                    id=attempt.id,
+                    mission_id=mission_id,
+                    from_phase=attempt.from_phase,
+                    target_phase=attempt.target_phase,
+                    attempt_number=attempt.attempt_number,
+                    idempotency_key=idempotency_key,
+                    state=attempt.state,
+                    started_at=attempt.started_at,
+                )
+            )
+            row.execution_state = ExecutionState.RUNNING
+            row.active_substage = active_substage
+            row.block_reason = None
+            row.error = None
+            row.updated_at = now_utc()
+            return attempt, False
+
+    async def get_attempt_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> MissionStepAttempt | None:
+        async with self.session() as session:
+            row = await session.scalar(
+                select(MissionStepAttemptRow).where(
+                    MissionStepAttemptRow.idempotency_key == idempotency_key
+                )
+            )
+            return self._attempt_model(row) if row else None
+
+    async def finish_step(
+        self,
+        mission_id: str,
+        attempt_id: str,
+        *,
+        phase: MissionPhase,
+        execution_state: ExecutionState,
+        status: MissionStatus,
+        error: str | None = None,
+    ) -> None:
+        async with self.session() as session:
+            mission = await session.get(MissionRow, mission_id, with_for_update=True)
+            attempt = await session.get(MissionStepAttemptRow, attempt_id)
+            if not mission or not attempt:
+                raise KeyError(mission_id)
+            if execution_state in {ExecutionState.WAITING, ExecutionState.COMPLETED}:
+                mission.phase = phase
+            mission.execution_state = execution_state
+            mission.status = status
+            mission.active_substage = None
+            mission.error = error
+            mission.block_reason = error if execution_state == ExecutionState.BLOCKED else None
+            mission.updated_at = now_utc()
+            attempt.state = execution_state
+            attempt.error = error
+            attempt.finished_at = now_utc()
+
+    @staticmethod
+    def _attempt_model(row: MissionStepAttemptRow) -> MissionStepAttempt:
+        return MissionStepAttempt(
+            id=row.id,
+            mission_id=row.mission_id,
+            from_phase=row.from_phase,
+            target_phase=row.target_phase,
+            attempt_number=row.attempt_number,
+            idempotency_key=row.idempotency_key,
+            state=row.state,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            error=row.error,
+        )
 
     async def get_mission(self, mission_id: str) -> dict[str, Any] | None:
         async with self.session() as session:
@@ -224,10 +430,26 @@ class Repository:
                     .order_by(TransferRow.created_at)
                 )
             ).all()
+            attempts = (
+                await session.scalars(
+                    select(MissionStepAttemptRow)
+                    .where(MissionStepAttemptRow.mission_id == mission_id)
+                    .order_by(MissionStepAttemptRow.started_at)
+                )
+            ).all()
             return {
                 "command": MissionCommand.model_validate_json(row.command_json),
                 "status": row.status,
                 "error": row.error,
+                "phase": row.phase,
+                "execution_state": row.execution_state,
+                "active_substage": row.active_substage,
+                "ai_mode": row.ai_mode,
+                "planned_windows": json.loads(row.planned_windows_json)
+                if row.planned_windows_json
+                else None,
+                "block_reason": row.block_reason,
+                "legacy_terminal": row.legacy_terminal,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "events": [TelemetryEvent.model_validate_json(item.event_json) for item in events],
@@ -237,6 +459,7 @@ class Repository:
                 "transfers": [
                     TransferRecord.model_validate_json(item.record_json) for item in transfers
                 ],
+                "step_attempts": [self._attempt_model(item) for item in attempts],
             }
 
     async def list_missions(self) -> list[dict[str, Any]]:
@@ -249,6 +472,15 @@ class Repository:
                     "command": MissionCommand.model_validate_json(row.command_json),
                     "status": row.status,
                     "error": row.error,
+                    "phase": row.phase,
+                    "execution_state": row.execution_state,
+                    "active_substage": row.active_substage,
+                    "ai_mode": row.ai_mode,
+                    "planned_windows": json.loads(row.planned_windows_json)
+                    if row.planned_windows_json
+                    else None,
+                    "block_reason": row.block_reason,
+                    "legacy_terminal": row.legacy_terminal,
                     "created_at": row.created_at,
                     "updated_at": row.updated_at,
                 }
@@ -291,16 +523,21 @@ class Repository:
     async def add_product(self, manifest: ProductManifest, artifact_path: str) -> None:
         manifest.artifact_path = artifact_path
         async with self.session() as session:
-            session.add(
-                ProductRow(
-                    id=manifest.id,
-                    run_id=manifest.run_id,
-                    mission_id=manifest.mission_id,
-                    level=manifest.level,
-                    manifest_json=manifest.model_dump_json(),
-                    artifact_path=artifact_path,
+            row = await session.get(ProductRow, manifest.id)
+            if row:
+                row.manifest_json = manifest.model_dump_json()
+                row.artifact_path = artifact_path
+            else:
+                session.add(
+                    ProductRow(
+                        id=manifest.id,
+                        run_id=manifest.run_id,
+                        mission_id=manifest.mission_id,
+                        level=manifest.level,
+                        manifest_json=manifest.model_dump_json(),
+                        artifact_path=artifact_path,
+                    )
                 )
-            )
 
     async def get_product(self, product_id: str) -> ProductManifest | None:
         async with self.session() as session:

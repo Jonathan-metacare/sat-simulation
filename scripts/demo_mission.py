@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from uuid import uuid4
 
 import httpx
 
@@ -23,18 +24,33 @@ async def main() -> None:
             json={"scenario_id": scenario["config"]["id"]},
         )
         response.raise_for_status()
-        mission_id = response.json()["mission_id"]
+        mission_id = response.json()["command"]["id"]
         while True:
             detail = (await client.get(f"/api/missions/{mission_id}")).json()
             print(
                 json.dumps(
-                    {"mission_id": mission_id, "status": detail["status"]},
+                    {
+                        "mission_id": mission_id,
+                        "phase": detail["phase"],
+                        "execution_state": detail["execution_state"],
+                    },
                     ensure_ascii=False,
                 )
             )
-            if detail["status"] in {"completed", "failed"}:
+            if detail["phase"] == "completed":
                 break
-            await asyncio.sleep(0.5)
+            if detail["execution_state"] == "blocked":
+                raise SystemExit(detail["block_reason"])
+            if detail["execution_state"] in {"waiting", "retryable_error"}:
+                advance = await client.post(
+                    f"/api/missions/{mission_id}/advance",
+                    json={
+                        "playback_speed": 5,
+                        "idempotency_key": f"demo-{detail['phase']}-{uuid4().hex}",
+                    },
+                )
+                advance.raise_for_status()
+            await asyncio.sleep(0.8)
 
 
 if __name__ == "__main__":

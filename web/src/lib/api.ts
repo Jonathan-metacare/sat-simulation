@@ -1,4 +1,4 @@
-import type { MissionDetail, MissionSummary, OrbitTrack, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
+import type { AIMode, MissionDetail, MissionSummary, OrbitTrack, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
 
@@ -16,10 +16,14 @@ export const api = {
   control:(id:string,action:string,rate?:number)=>request<{clock:ScenarioRecord["clock"]}>(`/scenarios/${id}/control`,{method:"POST",body:JSON.stringify({action,rate})}),
   missions:()=>request<MissionSummary[]>("/missions"),
   mission:(id:string)=>request<MissionDetail>(`/missions/${id}`),
-  createMission:(scenarioId:string)=>request<{mission_id:string;run_id:string;status:string}>("/missions",{method:"POST",body:JSON.stringify({scenario_id:scenarioId,name:"北京目标光学观测",target_name:"北京演示目标",target_latitude:39.9042,target_longitude:116.4074,scene_id:"demo-optical-scene",enable_ai:true})}),
+  createMission:(scenarioId:string,aiMode:AIMode)=>request<MissionDetail>("/missions",{method:"POST",body:JSON.stringify({scenario_id:scenarioId,name:"自动规划光学观测",scene_id:"demo-optical-scene",ai_mode:aiMode})}),
+  advanceMission:(missionId:string,playbackSpeed:1|2|5,idempotencyKey:string)=>request<{mission_id:string;action:string}>(`/missions/${missionId}/advance`,{method:"POST",body:JSON.stringify({playback_speed:playbackSpeed,idempotency_key:idempotencyKey})}),
+  cancelMission:(missionId:string)=>request<MissionDetail>(`/missions/${missionId}/cancel`,{method:"POST"}),
+  providerHealth:()=>request<Record<string,{status:string;api_url_configured?:boolean}>>('/providers/health'),
   transfers:(runId?:string)=>request<TransferRecord[]>(`/transfers${runId?`?run_id=${runId}`:""}`),
   faults:(scenarioId:string)=>request<Array<{id:string;link:string;drop_rate:number}>>(`/scenarios/${scenarioId}/faults`),
   injectDrop:(scenarioId:string)=>request<{id:string}>(`/scenarios/${scenarioId}/faults`,{method:"POST",body:JSON.stringify({link:"downlink",drop_rate:.1,corrupt_rate:.02,enabled:true})}),
   deleteFault:(scenarioId:string,faultId:string)=>request<void>(`/scenarios/${scenarioId}/faults/${faultId}`,{method:"DELETE"})
 };
 export function artifactURL(productId:string){return `${API_BASE}/artifacts/${productId}`;}
+export function eventStreamURL(runId:string){return `${API_BASE}/events/stream?run_id=${encodeURIComponent(runId)}`;}

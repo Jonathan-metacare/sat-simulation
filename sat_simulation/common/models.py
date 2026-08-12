@@ -30,9 +30,38 @@ class MissionStatus(StrEnum):
     DOWNLINKING = "downlinking"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
-TERMINAL_MISSION_STATUSES = {MissionStatus.COMPLETED, MissionStatus.FAILED}
+TERMINAL_MISSION_STATUSES = {
+    MissionStatus.COMPLETED,
+    MissionStatus.FAILED,
+    MissionStatus.CANCELLED,
+}
+
+
+class MissionPhase(StrEnum):
+    INITIALIZED = "initialized"
+    UPLINK_COMPLETE = "uplink_complete"
+    CAPTURE_COMPLETE = "capture_complete"
+    PROCESSING_COMPLETE = "processing_complete"
+    GTX_COMPLETE = "gtx_complete"
+    AI_COMPLETE = "ai_complete"
+    COMPLETED = "completed"
+
+
+class ExecutionState(StrEnum):
+    WAITING = "waiting"
+    RUNNING = "running"
+    BLOCKED = "blocked"
+    RETRYABLE_ERROR = "retryable_error"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class AIMode(StrEnum):
+    YOLO = "yolo"
+    LLM = "llm"
 
 
 class ClockAction(StrEnum):
@@ -130,6 +159,8 @@ class MissionCommand(BaseModel):
     requested_at: datetime = Field(default_factory=utc_now)
     scene_id: str = "demo-optical-scene"
     enable_ai: bool = True
+    ai_mode: AIMode = AIMode.YOLO
+    planned_windows: PlannedWindows | None = None
 
 
 class MissionCreate(BaseModel):
@@ -140,6 +171,12 @@ class MissionCreate(BaseModel):
     target_longitude: float = Field(default=116.4074, ge=-180, le=180)
     scene_id: str = "demo-optical-scene"
     enable_ai: bool = True
+    ai_mode: AIMode = AIMode.YOLO
+
+
+class MissionAdvance(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=160)
+    playback_speed: Literal[1, 2, 5] = 1
 
 
 class SpacecraftState(BaseModel):
@@ -172,6 +209,31 @@ class ContactWindow(BaseModel):
     max_elevation_deg: float
 
 
+class PlannedWindows(BaseModel):
+    uplink: ContactWindow
+    capture: ContactWindow
+    downlink: ContactWindow
+    target_name: str
+    target_latitude: float
+    target_longitude: float
+    tle_line1: str
+    tle_line2: str
+    minimum_elevation_deg: float = 5.0
+
+
+class MissionStepAttempt(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("attempt"))
+    mission_id: str
+    from_phase: MissionPhase
+    target_phase: MissionPhase
+    attempt_number: int
+    idempotency_key: str
+    state: ExecutionState = ExecutionState.RUNNING
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: datetime | None = None
+    error: str | None = None
+
+
 class OrbitTrack(BaseModel):
     generated_at: datetime
     satellite_name: str
@@ -197,6 +259,7 @@ class TelemetryEvent(BaseModel):
     source: str
     data: dict[str, Any] = Field(default_factory=dict)
     provenance: Literal["measured", "derived", "simulated", "placeholder"] = "simulated"
+    channel: Literal["simulation_control", "uplink", "gtx", "downlink"] = "simulation_control"
 
 
 class TransferStatus(StrEnum):
@@ -232,6 +295,7 @@ class ProductLevel(StrEnum):
     THUMBNAIL = "thumbnail"
     STAC = "stac"
     AI_RESULT = "ai_result"
+    RESULT_PACKAGE = "result_package"
 
 
 class ProductManifest(BaseModel):
@@ -248,6 +312,31 @@ class ProductManifest(BaseModel):
     quality: dict[str, Any] = Field(default_factory=dict)
     lineage: list[str] = Field(default_factory=list)
     artifact_path: str | None = None
+
+
+class MissionSummary(BaseModel):
+    command: MissionCommand
+    status: MissionStatus
+    error: str | None = None
+    phase: MissionPhase
+    execution_state: ExecutionState
+    active_substage: str | None = None
+    ai_mode: AIMode
+    planned_windows: PlannedWindows | None = None
+    block_reason: str | None = None
+    legacy_terminal: bool = False
+    next_action: str | None = None
+    can_advance: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class MissionDetail(MissionSummary):
+    events: list[TelemetryEvent] = Field(default_factory=list)
+    products: list[ProductManifest] = Field(default_factory=list)
+    onboard_products: list[ProductManifest] = Field(default_factory=list)
+    transfers: list[TransferRecord] = Field(default_factory=list)
+    step_attempts: list[MissionStepAttempt] = Field(default_factory=list)
 
 
 class Detection(BaseModel):

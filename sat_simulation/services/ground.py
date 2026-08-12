@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import zipfile
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import rasterio
@@ -20,11 +23,18 @@ from sat_simulation.common.clock import SimulationClock
 from sat_simulation.common.link import TCPReceiver, TCPTransport
 from sat_simulation.common.models import (
     ClockAction,
+    ExecutionState,
     FaultRule,
     LinkKind,
+    MissionAdvance,
     MissionCommand,
     MissionCreate,
+    MissionDetail,
+    MissionPhase,
     MissionStatus,
+    MissionSummary,
+    ProductLevel,
+    ProductManifest,
     ScenarioConfig,
     ScenarioControl,
     TelemetryEvent,
@@ -33,12 +43,51 @@ from sat_simulation.common.models import (
     default_link_profiles,
     utc_now,
 )
-from sat_simulation.common.orbit import orbit_track
+from sat_simulation.common.orbit import orbit_track, plan_mission_windows
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
 from sat_simulation.config import Settings, settings
 from sat_simulation.optical.pipeline import sha256_file
 from sat_simulation.storage import Repository
+
+PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
+    MissionPhase.INITIALIZED: (
+        MissionPhase.UPLINK_COMPLETE,
+        "uplink",
+        "进入上注窗口",
+        MissionStatus.UPLINKING,
+    ),
+    MissionPhase.UPLINK_COMPLETE: (
+        MissionPhase.CAPTURE_COMPLETE,
+        "capture",
+        "进入拍摄窗口",
+        MissionStatus.CAPTURING,
+    ),
+    MissionPhase.CAPTURE_COMPLETE: (
+        MissionPhase.PROCESSING_COMPLETE,
+        "processing",
+        "执行产品处理",
+        MissionStatus.L1B_PROCESSING,
+    ),
+    MissionPhase.PROCESSING_COMPLETE: (
+        MissionPhase.GTX_COMPLETE,
+        "gtx",
+        "执行 GTX 传输",
+        MissionStatus.GTX_TRANSFER,
+    ),
+    MissionPhase.GTX_COMPLETE: (
+        MissionPhase.AI_COMPLETE,
+        "ai",
+        "执行智能分析",
+        MissionStatus.AI_PROCESSING,
+    ),
+    MissionPhase.AI_COMPLETE: (
+        MissionPhase.COMPLETED,
+        "downlink",
+        "获取星上结果",
+        MissionStatus.DOWNLINKING,
+    ),
+}
 
 
 class GroundState:
@@ -51,14 +100,18 @@ class GroundState:
         self.clocks: dict[str, SimulationClock] = {}
         self.receiver = TCPReceiver(self.handle_downlink)
         self.event_conditions: dict[str, asyncio.Condition] = defaultdict(asyncio.Condition)
+        self.tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.scene_dir.mkdir(parents=True, exist_ok=True)
         await self.repo.init()
+        await self.repo.recover_running_missions()
         await self.receiver.start(self.settings.host, self.settings.ground_downlink_port)
 
     async def close(self) -> None:
+        for task in self.tasks:
+            task.cancel()
         await self.receiver.close()
         await self.repo.close()
 
@@ -69,29 +122,26 @@ class GroundState:
         stored = await self.repo.get_scenario(scenario_id)
         if not stored:
             raise KeyError(scenario_id)
-        config, state = stored
-        clock = SimulationClock(config.epoch, state.rate)
+        config, saved = stored
+        clock = SimulationClock(config.epoch, saved.rate, run_id=saved.run_id)
+        await clock.jump_to(saved.simulated_at)
         self.clocks[scenario_id] = clock
         return clock
 
+    async def append_event(self, event: TelemetryEvent) -> None:
+        await self.repo.append_event(event)
+        condition = self.event_conditions[event.run_id]
+        async with condition:
+            condition.notify_all()
+
     async def handle_downlink(
-        self, message_type: MessageType, payload: bytes, frame: Frame
+        self, message_type: MessageType, payload: bytes, _frame: Frame
     ) -> dict[str, Any]:
         if message_type == MessageType.EVENT:
             event = TelemetryEvent.model_validate(unpack_json(payload))
-            await self.repo.append_event(event)
-            if event.event_type == "transfer_completed":
-                records = event.data.get("records", [])
-                if isinstance(records, list):
-                    for value in records:
-                        await self.repo.add_transfer(TransferRecord.model_validate(value))
-            if event.mission_id and event.status in {item.value for item in MissionStatus}:
-                await self.repo.update_mission(event.mission_id, event.status)
-            condition = self.event_conditions[event.run_id]
-            async with condition:
-                condition.notify_all()
+            await self.append_event(event)
             return {"event_id": event.id, "stored": True}
-        if message_type == MessageType.PRODUCT:
+        if message_type in {MessageType.PRODUCT, MessageType.RESULT_PACKAGE}:
             manifest, content = unpack_product(payload)
             digest = hashlib.sha256(content).hexdigest()
             if digest != manifest.sha256:
@@ -101,74 +151,397 @@ class GroundState:
             path = mission_dir / manifest.name
             path.write_bytes(content)
             await self.repo.add_product(manifest, str(path))
+            if message_type == MessageType.RESULT_PACKAGE:
+                await self.unpack_result_package(manifest, path, mission_dir)
             return {"product_id": manifest.id, "sha256": digest, "stored": True}
         raise ValueError(f"unsupported downlink message type {message_type.name}")
 
-    async def dispatch_mission(
-        self,
-        command: MissionCommand,
-        scenario: ScenarioConfig,
-        faults: list[FaultRule],
+    async def unpack_result_package(
+        self, package: ProductManifest, path: Path, mission_dir: Path
     ) -> None:
+        extract_dir = mission_dir / "result"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if any(Path(name).is_absolute() or ".." in Path(name).parts for name in names):
+                raise ValueError("unsafe result package member")
+            checksum_content = archive.read("checksums.json")
+            expected_checksum = package.processing_parameters.get("members", {}).get(
+                "checksums.json"
+            )
+            if (
+                not expected_checksum
+                or hashlib.sha256(checksum_content).hexdigest() != expected_checksum
+            ):
+                raise ValueError("result package checksums.json SHA-256 mismatch")
+            checksum_data = json.loads(checksum_content)
+            for name, expected in checksum_data.items():
+                content = archive.read(name)
+                if hashlib.sha256(content).hexdigest() != expected:
+                    raise ValueError(f"result package member SHA-256 mismatch: {name}")
+                (extract_dir / name).write_bytes(content)
+            summary = json.loads((extract_dir / "mission_summary.json").read_text("utf-8"))
+            by_name = {item["name"]: item for item in summary.get("products", [])}
+            for name in checksum_data:
+                value = by_name.get(name)
+                if value:
+                    product = ProductManifest.model_validate(value)
+                    await self.repo.add_product(product, str(extract_dir / name))
+
+    async def animate_to(
+        self,
+        *,
+        mission: dict[str, Any],
+        scenario: ScenarioConfig,
+        clock: SimulationClock,
+        target,
+        playback_speed: int,
+        label: str,
+        status: MissionStatus,
+    ) -> None:
+        await clock.pause()
+        start = clock.now()
+        if target < start:
+            target = start
+        ticks = 12
+        delta = (target - start).total_seconds() / ticks
+        wall_delay = max(0.0, self.settings.stage_animation_seconds / playback_speed / ticks)
+        command: MissionCommand = mission["command"]
+        for index in range(1, ticks + 1):
+            if delta > 0:
+                await clock.step(delta)
+            sample = orbit_track(
+                scenario,
+                clock.now(),
+                history_minutes=2,
+                forecast_minutes=4,
+                pass_horizon_minutes=60,
+                step_seconds=30,
+            ).current
+            await self.repo.update_scenario_clock(command.scenario_id, clock.state())
+            await self.append_event(
+                TelemetryEvent(
+                    run_id=command.run_id,
+                    mission_id=command.id,
+                    event_type="simulation_tick",
+                    status=status,
+                    message=label,
+                    simulated_at=clock.now(),
+                    source="ground-orchestrator",
+                    data={"progress": index / ticks, "spacecraft": sample.model_dump(mode="json")},
+                    channel="simulation_control",
+                )
+            )
+            if wall_delay:
+                await asyncio.sleep(wall_delay)
+
+    async def progress_delay(
+        self,
+        mission: dict[str, Any],
+        clock: SimulationClock,
+        playback_speed: int,
+        label: str,
+        status: MissionStatus,
+    ) -> None:
+        command: MissionCommand = mission["command"]
+        ticks = 8
+        wall_delay = max(0.0, self.settings.stage_animation_seconds / playback_speed / ticks)
+        for index in range(1, ticks + 1):
+            await self.append_event(
+                TelemetryEvent(
+                    run_id=command.run_id,
+                    mission_id=command.id,
+                    event_type="stage_progress",
+                    status=status,
+                    message=label,
+                    simulated_at=clock.now(),
+                    source="ground-orchestrator",
+                    data={"progress": index / ticks},
+                )
+            )
+            if wall_delay:
+                await asyncio.sleep(wall_delay)
+
+    async def send_uplink(
+        self,
+        mission: dict[str, Any],
+        scenario: ScenarioConfig,
+        clock: SimulationClock,
+        message_type: MessageType,
+        body: bytes,
+        name: str,
+    ) -> tuple[Any, TransferRecord]:
+        command: MissionCommand = mission["command"]
+        faults = await self.repo.list_faults(command.scenario_id)
+        fault = next(
+            (item for item in faults if item.link == LinkKind.UPLINK and item.enabled), None
+        )
+        transport = TCPTransport(
+            profile=default_link_profiles()[LinkKind.UPLINK],
+            clock=clock,
+            fault=fault,
+            seed=scenario.seed,
+        )
+        started = utc_now()
+        result = await transport.send(
+            self.settings.platform_uplink_host,
+            self.settings.platform_uplink_port,
+            run_id=command.run_id,
+            mission_id=command.id,
+            message_type=message_type,
+            payload=body,
+        )
+        record = TransferRecord(
+            run_id=command.run_id,
+            mission_id=command.id,
+            link=LinkKind.UPLINK,
+            name=name,
+            total_bytes=result.total_bytes,
+            transferred_bytes=result.total_bytes,
+            frame_count=result.frames,
+            retry_count=result.retries,
+            crc_failures=result.crc_failures,
+            sha256=hashlib.sha256(body).hexdigest(),
+            status=TransferStatus.COMPLETED,
+            started_at=started,
+            completed_at=utc_now(),
+        )
+        await self.repo.add_transfer(record)
+        return result, record
+
+    async def run_step(self, mission_id: str, attempt_id: str, playback_speed: int) -> None:
+        mission = await self.repo.get_mission(mission_id)
+        if not mission:
+            return
+        command: MissionCommand = mission["command"]
+        scenario_stored = await self.repo.get_scenario(command.scenario_id)
+        if not scenario_stored or not command.planned_windows:
+            return
+        scenario = scenario_stored[0]
         clock = await self.clock_for(command.scenario_id)
+        phase = MissionPhase(mission["phase"])
+        target_phase, stage, label, status = PHASE_FLOW[phase]
         try:
-            if clock.state().paused:
-                await clock.resume()
-                await self.repo.update_scenario_clock(command.scenario_id, clock.state())
-            fault = next(
-                (item for item in faults if item.link == LinkKind.UPLINK and item.enabled), None
+            await self.append_event(
+                TelemetryEvent(
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    event_type="macro_phase_started",
+                    status=status,
+                    message=f"单步开始：{label}",
+                    simulated_at=clock.now(),
+                    source="ground-orchestrator",
+                    data={
+                        "from_phase": phase,
+                        "target_phase": target_phase,
+                        "active_substage": stage,
+                    },
+                )
             )
-            transport = TCPTransport(
-                profile=default_link_profiles()[LinkKind.UPLINK],
-                clock=clock,
-                fault=fault,
-                seed=scenario.seed,
+            if stage == "uplink":
+                await self.animate_to(
+                    mission=mission,
+                    scenario=scenario,
+                    clock=clock,
+                    target=command.planned_windows.uplink.max_elevation_at,
+                    playback_speed=playback_speed,
+                    label="卫星正在进入北京站上注窗口",
+                    status=MissionStatus.UPLINKING,
+                )
+                faults = await self.repo.list_faults(command.scenario_id)
+                body = pack_json(
+                    {
+                        "command": command.model_dump(mode="json"),
+                        "scenario": scenario.model_dump(mode="json"),
+                        "faults": [item.model_dump(mode="json") for item in faults],
+                    }
+                )
+                _result, record = await self.send_uplink(
+                    mission, scenario, clock, MessageType.COMMAND, body, "mission-command.json"
+                )
+                await self.append_event(
+                    TelemetryEvent(
+                        run_id=command.run_id,
+                        mission_id=mission_id,
+                        event_type="command_received",
+                        status=MissionStatus.UPLINKING,
+                        message="任务指令经真实数传上注，星务已接收并校验。",
+                        simulated_at=clock.now(),
+                        source="platform-node",
+                        data={"record": record.model_dump(mode="json")},
+                        channel="uplink",
+                        provenance="measured",
+                    )
+                )
+            elif stage == "capture":
+                await self.animate_to(
+                    mission=mission,
+                    scenario=scenario,
+                    clock=clock,
+                    target=command.planned_windows.capture.max_elevation_at,
+                    playback_speed=playback_speed,
+                    label="卫星正在进入独立拍摄区域",
+                    status=MissionStatus.MANEUVERING,
+                )
+                await self.call_platform_stage(mission, stage, clock)
+            elif stage == "downlink":
+                await self.animate_to(
+                    mission=mission,
+                    scenario=scenario,
+                    clock=clock,
+                    target=command.planned_windows.downlink.max_elevation_at,
+                    playback_speed=playback_speed,
+                    label="卫星正在进入下一次北京站可见窗口",
+                    status=MissionStatus.DOWNLINKING,
+                )
+                body = pack_json({"mission_id": mission_id, "request": "result_package"})
+                result, record = await self.send_uplink(
+                    mission,
+                    scenario,
+                    clock,
+                    MessageType.RESULT_REQUEST,
+                    body,
+                    "result-request.json",
+                )
+                downlink_value = result.response.get("transfer")
+                if downlink_value:
+                    await self.repo.add_transfer(TransferRecord.model_validate(downlink_value))
+                await self.append_event(
+                    TelemetryEvent(
+                        run_id=command.run_id,
+                        mission_id=mission_id,
+                        event_type="result_package_received",
+                        status=MissionStatus.DOWNLINKING,
+                        message="地面按 mission_id 请求，星务结果包已在下一过站窗口下传。",
+                        simulated_at=clock.now(),
+                        source="ground-station",
+                        data={"request_transfer": record.model_dump(mode="json")},
+                        channel="downlink",
+                        provenance="measured",
+                    )
+                )
+            else:
+                await self.progress_delay(mission, clock, playback_speed, label, status)
+                await self.call_platform_stage(mission, stage, clock)
+
+            await clock.pause()
+            await self.repo.update_scenario_clock(command.scenario_id, clock.state())
+            final_state = (
+                ExecutionState.COMPLETED
+                if target_phase == MissionPhase.COMPLETED
+                else ExecutionState.WAITING
             )
-            await self.repo.update_mission(command.id, MissionStatus.UPLINKING)
-            body = pack_json(
-                {
-                    "command": command.model_dump(mode="json"),
-                    "scenario": scenario.model_dump(mode="json"),
-                    "faults": [item.model_dump(mode="json") for item in faults],
-                }
+            final_status = (
+                MissionStatus.COMPLETED if target_phase == MissionPhase.COMPLETED else status
             )
-            result = await transport.send(
-                self.settings.platform_uplink_host,
-                self.settings.platform_uplink_port,
-                run_id=command.run_id,
-                mission_id=command.id,
-                message_type=MessageType.COMMAND,
-                payload=body,
+            await self.repo.finish_step(
+                mission_id,
+                attempt_id,
+                phase=target_phase,
+                execution_state=final_state,
+                status=final_status,
             )
-            record = TransferRecord(
-                run_id=command.run_id,
-                mission_id=command.id,
-                link=LinkKind.UPLINK,
-                name="mission-command.json",
-                total_bytes=result.total_bytes,
-                transferred_bytes=result.total_bytes,
-                frame_count=result.frames,
-                retry_count=result.retries,
-                crc_failures=result.crc_failures,
-                sha256=hashlib.sha256(body).hexdigest(),
-                status=TransferStatus.COMPLETED,
-                started_at=utc_now(),
-                completed_at=utc_now(),
+            await self.append_event(
+                TelemetryEvent(
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    event_type="macro_phase_completed",
+                    status=final_status,
+                    message="阶段成功 · 仿真已暂停",
+                    simulated_at=clock.now(),
+                    source="ground-orchestrator",
+                    data={"phase": target_phase, "paused": True},
+                )
             )
-            await self.repo.add_transfer(record)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            await self.repo.update_mission(command.id, MissionStatus.FAILED, str(exc))
+            await clock.pause()
+            blocked = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 423
+            reason = self.platform_error(exc)
+            await self.repo.finish_step(
+                mission_id,
+                attempt_id,
+                phase=phase,
+                execution_state=ExecutionState.BLOCKED
+                if blocked
+                else ExecutionState.RETRYABLE_ERROR,
+                status=status,
+                error=reason,
+            )
+            await self.append_event(
+                TelemetryEvent(
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    event_type="macro_phase_blocked" if blocked else "macro_phase_failed",
+                    status=status,
+                    message=reason,
+                    simulated_at=clock.now(),
+                    source="ground-orchestrator",
+                    data={"phase": phase, "retryable": True},
+                )
+            )
+
+    @staticmethod
+    def platform_error(exc: Exception) -> str:
+        if isinstance(exc, httpx.HTTPStatusError):
+            try:
+                return str(exc.response.json().get("detail", exc))
+            except ValueError:
+                pass
+        return str(exc)
+
+    async def call_platform_stage(
+        self, mission: dict[str, Any], stage: str, clock: SimulationClock
+    ) -> None:
+        command: MissionCommand = mission["command"]
+        async with httpx.AsyncClient(
+            timeout=max(60.0, self.settings.provider_timeout_seconds + 10)
+        ) as client:
+            response = await client.post(
+                f"{self.settings.platform_http_url}/internal/missions/{command.id}/advance",
+                json={"stage": stage, "simulated_at": clock.now().isoformat()},
+            )
+            response.raise_for_status()
+            body = response.json()
+        for value in body.get("events", []):
             event = TelemetryEvent(
                 run_id=command.run_id,
                 mission_id=command.id,
-                event_type="uplink_failed",
-                status=MissionStatus.FAILED,
-                message=f"指令上注失败：{exc}",
+                event_type=value["event_type"],
+                status=value["status"],
+                message=value["message"],
                 simulated_at=clock.now(),
-                source="ground-station",
-                data={"error": str(exc)},
+                source="platform-node",
+                data=value.get("data", {}),
+                provenance="derived",
+                channel="simulation_control" if stage in {"capture", "processing"} else "gtx",
             )
-            await self.repo.append_event(event)
+            await self.append_event(event)
+            record_value = event.data.get("record")
+            if record_value:
+                await self.repo.add_transfer(TransferRecord.model_validate(record_value))
+
+
+def enrich_mission(mission: dict[str, Any]) -> dict[str, Any]:
+    phase = MissionPhase(mission["phase"])
+    flow = PHASE_FLOW.get(phase)
+    mission["next_action"] = flow[2] if flow else None
+    mission["can_advance"] = bool(
+        flow
+        and not mission.get("legacy_terminal")
+        and mission["execution_state"]
+        not in {ExecutionState.RUNNING, ExecutionState.COMPLETED, ExecutionState.CANCELLED}
+    )
+    onboard: dict[str, dict[str, Any]] = {}
+    for event in mission.get("events", []):
+        value = event.data.get("manifest")
+        if isinstance(value, dict) and value.get("level"):
+            public_value = dict(value)
+            public_value.pop("artifact_path", None)
+            onboard[str(public_value["level"])] = public_value
+    mission["onboard_products"] = list(onboard.values())
+    return mission
 
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
@@ -181,9 +554,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         await state.close()
 
     app = FastAPI(
-        title="Satellite Simulation Ground Station API",
-        version=__version__,
-        lifespan=lifespan,
+        title="Satellite Simulation Ground Station API", version=__version__, lifespan=lifespan
     )
     app.state.simulation = state
     app.add_middleware(
@@ -207,8 +578,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         return {
             "version": __version__,
             "ai": {
-                "detection": "not_configured" if not app_settings.yolo_api_url else "configured",
-                "language": "not_configured" if not app_settings.llm_api_url else "configured",
+                "detection": "configured" if app_settings.yolo_api_url else "not_configured",
+                "language": "configured" if app_settings.llm_api_url else "not_configured",
             },
             "links": {
                 key.value: value.model_dump(mode="json")
@@ -216,10 +587,19 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             },
         }
 
+    @app.get("/api/providers/health")
+    async def provider_health() -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                response = await client.get(f"{app_settings.gpu_http_url}/health")
+                response.raise_for_status()
+                return response.json()["providers"]
+        except Exception as exc:
+            return {"status": "unavailable", "reason": str(exc)}
+
     @app.post("/api/scenes/import")
     async def import_scene(
-        file: UploadFile = File(...),
-        scene_id: str = Query(..., min_length=1, max_length=120),
+        file: UploadFile = File(...), scene_id: str = Query(..., min_length=1, max_length=120)
     ) -> dict[str, Any]:
         if not file.filename or not file.filename.lower().endswith((".tif", ".tiff")):
             raise HTTPException(400, "Only 16-bit GeoTIFF scenes are accepted.")
@@ -240,24 +620,16 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         except Exception as exc:
             path.unlink(missing_ok=True)
             raise HTTPException(400, f"Invalid GeoTIFF: {exc}") from exc
-
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    f"{app_settings.platform_http_url}/internal/scenes",
-                    params={"scene_id": scene_id},
-                    files={"file": (path.name, content, "image/tiff")},
-                )
-                response.raise_for_status()
-        except Exception as exc:
-            raise HTTPException(503, f"Scene saved but platform staging failed: {exc}") from exc
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{app_settings.platform_http_url}/internal/scenes",
+                params={"scene_id": scene_id},
+                files={"file": (path.name, content, "image/tiff")},
+            )
+            response.raise_for_status()
         digest = sha256_file(path)
         await state.repo.add_scene(
-            scene_id=scene_id,
-            name=file.filename,
-            path=str(path),
-            sha256=digest,
-            metadata=metadata,
+            scene_id=scene_id, name=file.filename, path=str(path), sha256=digest, metadata=metadata
         )
         return {"id": scene_id, "sha256": digest, "metadata": metadata}
 
@@ -279,12 +651,13 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         stored = await state.repo.get_scenario(scenario_id)
         if not stored:
             raise HTTPException(404, "Scenario not found.")
-        scenario, _clock_state = stored
-        clock = await state.clock_for(scenario_id)
-        return orbit_track(scenario, clock.now())
+        return orbit_track(stored[0], (await state.clock_for(scenario_id)).now())
 
     @app.post("/api/scenarios/{scenario_id}/control")
     async def control_scenario(scenario_id: str, control: ScenarioControl) -> dict[str, Any]:
+        active = await state.repo.active_mission_for_scenario(scenario_id)
+        if active and control.action in {ClockAction.START, ClockAction.RESUME, ClockAction.STEP}:
+            raise HTTPException(409, "存在活动任务，请使用任务单步按钮推进仿真")
         try:
             clock = await state.clock_for(scenario_id)
         except KeyError as exc:
@@ -294,10 +667,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         elif control.action == ClockAction.PAUSE:
             result = await clock.pause()
         elif control.action == ClockAction.STEP:
-            try:
-                result = await clock.step(control.step_seconds)
-            except RuntimeError as exc:
-                raise HTTPException(409, str(exc)) from exc
+            result = await clock.step(control.step_seconds)
         elif control.action == ClockAction.SET_RATE:
             result = await clock.set_rate(control.rate or 1)
         elif control.action == ClockAction.RESET:
@@ -306,48 +676,164 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         else:
             raise HTTPException(400, "Unsupported control action.")
         await state.repo.update_scenario_clock(scenario_id, result)
-        try:
-            async with httpx.AsyncClient(timeout=3) as client:
-                await client.post(
-                    f"{app_settings.platform_http_url}/internal/control",
-                    json={"scenario_id": scenario_id, "control": control.model_dump(mode="json")},
-                )
-        except Exception:
-            pass
         return {"clock": result}
 
-    @app.post("/api/missions", status_code=202)
-    async def create_mission(request: MissionCreate) -> dict[str, Any]:
+    @app.post("/api/missions", status_code=201, response_model=MissionDetail)
+    async def create_mission(request: MissionCreate) -> MissionDetail:
         stored = await state.repo.get_scenario(request.scenario_id)
         if not stored:
             raise HTTPException(404, "Scenario not found.")
-        scenario, _clock_state = stored
+        active = await state.repo.active_mission_for_scenario(request.scenario_id)
+        if active:
+            raise HTTPException(409, f"场景已有非终态任务 {active}")
+        scenario = stored[0]
+        plan = plan_mission_windows(scenario, max(scenario.epoch, utc_now()))
         clock = await state.clock_for(request.scenario_id)
+        initial = plan.uplink.aos - timedelta(minutes=5)
+        new_clock = await clock.reset(initial)
+        await state.repo.update_scenario_clock(request.scenario_id, new_clock)
         command = MissionCommand(
-            run_id=clock.state().run_id,
+            run_id=new_clock.run_id,
             scenario_id=request.scenario_id,
             name=request.name,
-            target_name=request.target_name,
-            target_latitude=request.target_latitude,
-            target_longitude=request.target_longitude,
+            target_name=plan.target_name,
+            target_latitude=plan.target_latitude,
+            target_longitude=plan.target_longitude,
             scene_id=request.scene_id,
-            enable_ai=request.enable_ai,
+            enable_ai=True,
+            ai_mode=request.ai_mode,
+            planned_windows=plan,
         )
         await state.repo.create_mission(command)
-        faults = await state.repo.list_faults(request.scenario_id)
-        asyncio.create_task(state.dispatch_mission(command, scenario, faults))
-        return {"mission_id": command.id, "run_id": command.run_id, "status": "planned"}
+        await state.append_event(
+            TelemetryEvent(
+                run_id=command.run_id,
+                mission_id=command.id,
+                event_type="mission_initialized",
+                status=MissionStatus.PLANNED,
+                message="任务与真实轨道窗口已规划，仿真保持暂停。",
+                simulated_at=clock.now(),
+                source="ground-orchestrator",
+                data={"planned_windows": plan.model_dump(mode="json"), "ai_mode": request.ai_mode},
+            )
+        )
+        return MissionDetail.model_validate(
+            enrich_mission((await state.repo.get_mission(command.id)) or {})
+        )
 
-    @app.get("/api/missions")
-    async def list_missions() -> list[dict[str, Any]]:
-        return await state.repo.list_missions()
-
-    @app.get("/api/missions/{mission_id}")
-    async def get_mission(mission_id: str) -> dict[str, Any]:
+    @app.post("/api/missions/{mission_id}/advance", status_code=202)
+    async def advance_mission(mission_id: str, request: MissionAdvance) -> dict[str, Any]:
         mission = await state.repo.get_mission(mission_id)
         if not mission:
             raise HTTPException(404, "Mission not found.")
-        return mission
+        key = f"{mission_id}:{request.idempotency_key or uuid4().hex}"
+        previous = await state.repo.get_attempt_by_idempotency_key(key)
+        if previous:
+            previous_action = PHASE_FLOW[previous.from_phase][2]
+            return {
+                "mission_id": mission_id,
+                "attempt": previous,
+                "duplicate": True,
+                "action": previous_action,
+            }
+        phase = MissionPhase(mission["phase"])
+        if phase not in PHASE_FLOW:
+            raise HTTPException(409, "任务已经完成")
+        target_phase, stage, label, _status = PHASE_FLOW[phase]
+        try:
+            attempt, duplicate = await state.repo.begin_step(
+                mission_id,
+                target_phase=target_phase,
+                idempotency_key=key,
+                active_substage=stage,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if not duplicate:
+            task = asyncio.create_task(
+                state.run_step(mission_id, attempt.id, request.playback_speed)
+            )
+            state.tasks.add(task)
+            task.add_done_callback(state.tasks.discard)
+        return {
+            "mission_id": mission_id,
+            "attempt": attempt,
+            "duplicate": duplicate,
+            "action": label,
+        }
+
+    @app.post("/api/missions/{mission_id}/cancel", response_model=MissionDetail)
+    async def cancel_mission(mission_id: str) -> MissionDetail:
+        mission = await state.repo.get_mission(mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found.")
+        if mission["execution_state"] == ExecutionState.RUNNING:
+            raise HTTPException(409, "任务阶段正在执行，不能结束；请等待本阶段停止")
+        if mission["execution_state"] not in {
+            ExecutionState.COMPLETED,
+            ExecutionState.CANCELLED,
+        }:
+            clock = await state.clock_for(mission["command"].scenario_id)
+            paused_clock = await clock.pause()
+            await state.repo.update_scenario_clock(
+                mission["command"].scenario_id, paused_clock
+            )
+            await state.repo.cancel_mission(mission_id)
+            await state.append_event(
+                TelemetryEvent(
+                    run_id=mission["command"].run_id,
+                    mission_id=mission_id,
+                    event_type="mission_cancelled",
+                    status=MissionStatus.CANCELLED,
+                    message="当前任务已由用户结束；历史事件与星上产品保留。",
+                    simulated_at=clock.now(),
+                    source="ground-orchestrator",
+                    data={"phase_when_cancelled": mission["phase"]},
+                )
+            )
+        return MissionDetail.model_validate(
+            enrich_mission((await state.repo.get_mission(mission_id)) or {})
+        )
+
+    @app.get("/api/missions", response_model=list[MissionSummary])
+    async def list_missions() -> list[MissionSummary]:
+        return [
+            MissionSummary.model_validate(enrich_mission(item))
+            for item in await state.repo.list_missions()
+        ]
+
+    @app.get("/api/missions/{mission_id}", response_model=MissionDetail)
+    async def get_mission(mission_id: str) -> MissionDetail:
+        mission = await state.repo.get_mission(mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found.")
+        return MissionDetail.model_validate(enrich_mission(mission))
+
+    @app.get("/api/missions/{mission_id}/result")
+    async def get_mission_result(mission_id: str) -> dict[str, Any]:
+        mission = await state.repo.get_mission(mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found.")
+        if mission["phase"] != MissionPhase.COMPLETED:
+            raise HTTPException(409, "结果包尚未在下一过站窗口下传")
+        products = [
+            item
+            for item in mission["products"]
+            if item.level
+            in {
+                ProductLevel.RESULT_PACKAGE,
+                ProductLevel.AI_RESULT,
+                ProductLevel.STAC,
+                ProductLevel.THUMBNAIL,
+            }
+        ]
+        ai = next((item for item in products if item.level == ProductLevel.AI_RESULT), None)
+        ai_result = (
+            json.loads(Path(ai.artifact_path).read_text("utf-8"))
+            if ai and ai.artifact_path
+            else None
+        )
+        return {"mission_id": mission_id, "ai_result": ai_result, "products": products}
 
     @app.post("/api/scenarios/{scenario_id}/faults")
     async def add_fault(scenario_id: str, rule: FaultRule) -> FaultRule:
@@ -399,10 +885,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                         "id": str(event.sequence),
                         "data": event.model_dump_json(),
                     }
-                condition = state.event_conditions[run_id]
                 try:
-                    async with condition:
-                        await asyncio.wait_for(condition.wait(), timeout=10)
+                    async with state.event_conditions[run_id]:
+                        await asyncio.wait_for(state.event_conditions[run_id].wait(), timeout=10)
                 except TimeoutError:
                     yield {"event": "keepalive", "data": json.dumps({"sequence": sequence})}
 

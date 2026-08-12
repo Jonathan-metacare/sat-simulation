@@ -11,8 +11,10 @@ from sat_simulation.common.models import SimulationClockState
 class SimulationClock:
     """Thread-safe scaled clock used by all simulated timing paths."""
 
-    def __init__(self, epoch: datetime | None = None, rate: int = 1) -> None:
-        self._run_id = str(uuid4())
+    def __init__(
+        self, epoch: datetime | None = None, rate: int = 1, *, run_id: str | None = None
+    ) -> None:
+        self._run_id = run_id or str(uuid4())
         self._base_simulated = (epoch or datetime.now(UTC)).astimezone(UTC)
         self._base_monotonic = monotonic()
         self._rate = rate
@@ -83,6 +85,17 @@ class SimulationClock:
             self._base_simulated = (epoch or datetime.now(UTC)).astimezone(UTC)
             self._base_monotonic = monotonic()
             self._paused = True
+            self._revision += 1
+            self._condition.notify_all()
+            return self.state()
+
+    async def jump_to(self, simulated_at: datetime) -> SimulationClockState:
+        """Move a paused clock to an authoritative instant without creating a run."""
+        async with self._condition:
+            if not self._paused:
+                raise RuntimeError("clock must be paused before jumping")
+            self._base_simulated = simulated_at.astimezone(UTC)
+            self._base_monotonic = monotonic()
             self._revision += 1
             self._condition.notify_all()
             return self.state()

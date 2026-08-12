@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/providers/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Provider Health */
+        get: operations["provider_health_api_providers_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenes/import": {
         parameters: {
             query?: never;
@@ -125,6 +142,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/missions/{mission_id}/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Advance Mission */
+        post: operations["advance_mission_api_missions__mission_id__advance_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/missions/{mission_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Mission */
+        post: operations["cancel_mission_api_missions__mission_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/missions/{mission_id}": {
         parameters: {
             query?: never;
@@ -134,6 +185,23 @@ export interface paths {
         };
         /** Get Mission */
         get: operations["get_mission_api_missions__mission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/missions/{mission_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Mission Result */
+        get: operations["get_mission_result_api_missions__mission_id__result_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -249,6 +317,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AIMode
+         * @enum {string}
+         */
+        AIMode: "yolo" | "llm";
         /** Body_import_scene_api_scenes_import_post */
         Body_import_scene_api_scenes_import_post: {
             /** File */
@@ -259,6 +332,31 @@ export interface components {
          * @enum {string}
          */
         ClockAction: "start" | "pause" | "resume" | "step" | "reset" | "set_rate";
+        /** ContactWindow */
+        ContactWindow: {
+            /**
+             * Aos
+             * Format: date-time
+             */
+            aos: string;
+            /**
+             * Los
+             * Format: date-time
+             */
+            los: string;
+            /**
+             * Max Elevation At
+             * Format: date-time
+             */
+            max_elevation_at: string;
+            /** Max Elevation Deg */
+            max_elevation_deg: number;
+        };
+        /**
+         * ExecutionState
+         * @enum {string}
+         */
+        ExecutionState: "waiting" | "running" | "blocked" | "retryable_error" | "completed" | "cancelled";
         /** FaultRule */
         FaultRule: {
             /** Id */
@@ -310,6 +408,64 @@ export interface components {
          * @enum {string}
          */
         LinkKind: "gtx" | "uplink" | "downlink";
+        /** MissionAdvance */
+        MissionAdvance: {
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Playback Speed
+             * @default 1
+             * @enum {integer}
+             */
+            playback_speed: 1 | 2 | 5;
+        };
+        /** MissionCommand */
+        MissionCommand: {
+            /** Id */
+            id?: string;
+            /** Run Id */
+            run_id: string;
+            /** Scenario Id */
+            scenario_id: string;
+            /**
+             * Name
+             * @default 北京目标光学观测
+             */
+            name: string;
+            /**
+             * Target Name
+             * @default 北京演示目标
+             */
+            target_name: string;
+            /**
+             * Target Latitude
+             * @default 39.9042
+             */
+            target_latitude: number;
+            /**
+             * Target Longitude
+             * @default 116.4074
+             */
+            target_longitude: number;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at?: string;
+            /**
+             * Scene Id
+             * @default demo-optical-scene
+             */
+            scene_id: string;
+            /**
+             * Enable Ai
+             * @default true
+             */
+            enable_ai: boolean;
+            /** @default yolo */
+            ai_mode: components["schemas"]["AIMode"];
+            planned_windows?: components["schemas"]["PlannedWindows"] | null;
+        };
         /** MissionCreate */
         MissionCreate: {
             /** Scenario Id */
@@ -344,6 +500,187 @@ export interface components {
              * @default true
              */
             enable_ai: boolean;
+            /** @default yolo */
+            ai_mode: components["schemas"]["AIMode"];
+        };
+        /** MissionDetail */
+        MissionDetail: {
+            command: components["schemas"]["MissionCommand"];
+            status: components["schemas"]["MissionStatus"];
+            /** Error */
+            error?: string | null;
+            phase: components["schemas"]["MissionPhase"];
+            execution_state: components["schemas"]["ExecutionState"];
+            /** Active Substage */
+            active_substage?: string | null;
+            ai_mode: components["schemas"]["AIMode"];
+            planned_windows?: components["schemas"]["PlannedWindows"] | null;
+            /** Block Reason */
+            block_reason?: string | null;
+            /**
+             * Legacy Terminal
+             * @default false
+             */
+            legacy_terminal: boolean;
+            /** Next Action */
+            next_action?: string | null;
+            /**
+             * Can Advance
+             * @default false
+             */
+            can_advance: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Events */
+            events?: components["schemas"]["TelemetryEvent"][];
+            /** Products */
+            products?: components["schemas"]["ProductManifest"][];
+            /** Onboard Products */
+            onboard_products?: components["schemas"]["ProductManifest"][];
+            /** Transfers */
+            transfers?: components["schemas"]["TransferRecord"][];
+            /** Step Attempts */
+            step_attempts?: components["schemas"]["MissionStepAttempt"][];
+        };
+        /**
+         * MissionPhase
+         * @enum {string}
+         */
+        MissionPhase: "initialized" | "uplink_complete" | "capture_complete" | "processing_complete" | "gtx_complete" | "ai_complete" | "completed";
+        /**
+         * MissionStatus
+         * @enum {string}
+         */
+        MissionStatus: "planned" | "uplinking" | "maneuvering" | "capturing" | "l0_processing" | "l1a_processing" | "l1b_processing" | "gtx_transfer" | "ai_processing" | "ai_skipped" | "downlinking" | "completed" | "failed" | "cancelled";
+        /** MissionStepAttempt */
+        MissionStepAttempt: {
+            /** Id */
+            id?: string;
+            /** Mission Id */
+            mission_id: string;
+            from_phase: components["schemas"]["MissionPhase"];
+            target_phase: components["schemas"]["MissionPhase"];
+            /** Attempt Number */
+            attempt_number: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** @default running */
+            state: components["schemas"]["ExecutionState"];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at?: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /** MissionSummary */
+        MissionSummary: {
+            command: components["schemas"]["MissionCommand"];
+            status: components["schemas"]["MissionStatus"];
+            /** Error */
+            error?: string | null;
+            phase: components["schemas"]["MissionPhase"];
+            execution_state: components["schemas"]["ExecutionState"];
+            /** Active Substage */
+            active_substage?: string | null;
+            ai_mode: components["schemas"]["AIMode"];
+            planned_windows?: components["schemas"]["PlannedWindows"] | null;
+            /** Block Reason */
+            block_reason?: string | null;
+            /**
+             * Legacy Terminal
+             * @default false
+             */
+            legacy_terminal: boolean;
+            /** Next Action */
+            next_action?: string | null;
+            /**
+             * Can Advance
+             * @default false
+             */
+            can_advance: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PlannedWindows */
+        PlannedWindows: {
+            uplink: components["schemas"]["ContactWindow"];
+            capture: components["schemas"]["ContactWindow"];
+            downlink: components["schemas"]["ContactWindow"];
+            /** Target Name */
+            target_name: string;
+            /** Target Latitude */
+            target_latitude: number;
+            /** Target Longitude */
+            target_longitude: number;
+            /** Tle Line1 */
+            tle_line1: string;
+            /** Tle Line2 */
+            tle_line2: string;
+            /**
+             * Minimum Elevation Deg
+             * @default 5
+             */
+            minimum_elevation_deg: number;
+        };
+        /**
+         * ProductLevel
+         * @enum {string}
+         */
+        ProductLevel: "raw" | "l0" | "l1a" | "l1b" | "thumbnail" | "stac" | "ai_result" | "result_package";
+        /** ProductManifest */
+        ProductManifest: {
+            /** Id */
+            id?: string;
+            /** Run Id */
+            run_id: string;
+            /** Mission Id */
+            mission_id: string;
+            level: components["schemas"]["ProductLevel"];
+            /** Name */
+            name: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Sha256 */
+            sha256: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at?: string;
+            /** Processing Parameters */
+            processing_parameters?: {
+                [key: string]: unknown;
+            };
+            /** Quality */
+            quality?: {
+                [key: string]: unknown;
+            };
+            /** Lineage */
+            lineage?: string[];
+            /** Artifact Path */
+            artifact_path?: string | null;
         };
         /** ScenarioConfig */
         ScenarioConfig: {
@@ -426,6 +763,49 @@ export interface components {
              * @default 1
              */
             step_seconds: number;
+        };
+        /** TelemetryEvent */
+        TelemetryEvent: {
+            /** Id */
+            id?: string;
+            /** Run Id */
+            run_id: string;
+            /** Mission Id */
+            mission_id?: string | null;
+            /**
+             * Sequence
+             * @default 0
+             */
+            sequence: number;
+            /** Event Type */
+            event_type: string;
+            /** Status */
+            status: string;
+            /** Message */
+            message: string;
+            /**
+             * Simulated At
+             * Format: date-time
+             */
+            simulated_at: string;
+            /** Source */
+            source: string;
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Provenance
+             * @default simulated
+             * @enum {string}
+             */
+            provenance: "measured" | "derived" | "simulated" | "placeholder";
+            /**
+             * Channel
+             * @default simulation_control
+             * @enum {string}
+             */
+            channel: "simulation_control" | "uplink" | "gtx" | "downlink";
         };
         /** TransferRecord */
         TransferRecord: {
@@ -519,6 +899,28 @@ export interface operations {
         };
     };
     public_config_api_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    provider_health_api_providers_health_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -717,9 +1119,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["MissionSummary"][];
                 };
             };
         };
@@ -734,6 +1134,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["MissionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    advance_mission_api_missions__mission_id__advance_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MissionAdvance"];
             };
         };
         responses: {
@@ -759,7 +1194,69 @@ export interface operations {
             };
         };
     };
+    cancel_mission_api_missions__mission_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_mission_api_missions__mission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_mission_result_api_missions__mission_id__result_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -9,6 +9,7 @@ from sat_simulation.common.models import (
     ContactWindow,
     OrbitSample,
     OrbitTrack,
+    PlannedWindows,
     ScenarioConfig,
     SpacecraftState,
 )
@@ -182,6 +183,94 @@ def orbit_track(
         history=history,
         forecast=forecast,
         contact_windows=relevant_windows,
+    )
+
+
+def plan_mission_windows(
+    config: ScenarioConfig,
+    start: datetime,
+    *,
+    horizon_hours: int = 48,
+    step_seconds: int = 20,
+    minimum_elevation_deg: float = 5,
+) -> PlannedWindows:
+    """Freeze the three real SGP4 windows used by a stepwise mission.
+
+    The capture target is the sub-satellite point after the first Beijing LOS,
+    so it is spatially and temporally distinct from the uplink pass.
+    """
+    satellite = Satrec.twoline2rv(config.tle_line1, config.tle_line2)
+    start = start.astimezone(UTC)
+    end = start + timedelta(hours=horizon_hours)
+    windows: list[ContactWindow] = []
+    active_start: datetime | None = None
+    maximum_at: datetime | None = None
+    maximum_elevation = -90.0
+    sampled_at = start
+    skip_partial_window = True
+    while sampled_at <= end:
+        lat, lon, altitude = _propagate_satellite(satellite, sampled_at)
+        elevation = elevation_deg(
+            lat,
+            lon,
+            altitude,
+            config.ground_station_latitude,
+            config.ground_station_longitude,
+            config.ground_station_altitude_m,
+        )
+        visible = elevation >= minimum_elevation_deg
+        if skip_partial_window:
+            if not visible:
+                skip_partial_window = False
+            sampled_at += timedelta(seconds=step_seconds)
+            continue
+        if visible:
+            if active_start is None:
+                active_start = sampled_at
+                maximum_at = sampled_at
+                maximum_elevation = elevation
+            elif elevation > maximum_elevation:
+                maximum_at = sampled_at
+                maximum_elevation = elevation
+        elif active_start is not None and maximum_at is not None:
+            windows.append(
+                ContactWindow(
+                    aos=active_start,
+                    los=sampled_at,
+                    max_elevation_at=maximum_at,
+                    max_elevation_deg=maximum_elevation,
+                )
+            )
+            active_start = None
+            maximum_at = None
+            maximum_elevation = -90.0
+        sampled_at += timedelta(seconds=step_seconds)
+
+    if len(windows) < 2:
+        raise ValueError("未来 48 小时内未找到两次北京站几何可见窗口")
+
+    uplink = windows[0]
+    capture_at = uplink.los + timedelta(minutes=15)
+    target_lat, target_lon, _ = _propagate_satellite(satellite, capture_at)
+    capture = ContactWindow(
+        aos=capture_at - timedelta(seconds=60),
+        los=capture_at + timedelta(seconds=60),
+        max_elevation_at=capture_at,
+        max_elevation_deg=90.0,
+    )
+    downlink = next((window for window in windows[1:] if window.aos > capture.los), None)
+    if downlink is None:
+        raise ValueError("未来 48 小时内未找到拍摄后的北京站可见窗口")
+    return PlannedWindows(
+        uplink=uplink,
+        capture=capture,
+        downlink=downlink,
+        target_name=f"自动目标 {target_lat:.2f}°, {target_lon:.2f}°",
+        target_latitude=target_lat,
+        target_longitude=target_lon,
+        tle_line1=config.tle_line1,
+        tle_line2=config.tle_line2,
+        minimum_elevation_deg=minimum_elevation_deg,
     )
 
 

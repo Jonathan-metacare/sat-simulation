@@ -30,6 +30,9 @@ class MessageType(IntEnum):
     EOF = 7
     ACK = 8
     NAK = 9
+    AI_EXECUTE = 10
+    RESULT_REQUEST = 11
+    RESULT_PACKAGE = 12
 
 
 def crc32c(data: bytes, crc: int = 0) -> int:

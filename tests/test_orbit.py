@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sat_simulation.common.models import ScenarioConfig
-from sat_simulation.common.orbit import orbit_track, propagate, target_attitude, visibility_radius_m
+from sat_simulation.common.orbit import (
+    orbit_track,
+    plan_mission_windows,
+    propagate,
+    target_attitude,
+    visibility_radius_m,
+)
 
 
 def test_sgp4_and_attitude_state_are_bounded() -> None:
@@ -29,3 +35,18 @@ def test_orbit_track_uses_sgp4_and_predicts_contact_windows() -> None:
     assert track.contact_windows
     assert all(window.los > window.aos for window in track.contact_windows)
     assert visibility_radius_m(track.current.altitude_km) == track.visibility_radius_m
+
+
+def test_stepwise_plan_freezes_two_ground_passes_and_independent_capture() -> None:
+    scenario = ScenarioConfig(epoch=datetime(2026, 5, 7, tzinfo=UTC))
+    plan = plan_mission_windows(scenario, scenario.epoch)
+
+    assert plan.uplink.los < plan.capture.aos
+    assert plan.capture.los < plan.downlink.aos
+    assert plan.uplink.max_elevation_deg >= 5
+    assert plan.downlink.max_elevation_deg >= 5
+    latitude, longitude, _altitude = propagate(scenario, plan.capture.max_elevation_at)
+    assert abs(latitude - plan.target_latitude) < 1e-9
+    assert abs(longitude - plan.target_longitude) < 1e-9
+    assert plan.tle_line1 == scenario.tle_line1
+    assert plan.tle_line2 == scenario.tle_line2

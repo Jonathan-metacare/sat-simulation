@@ -21,11 +21,19 @@ class Settings(BaseSettings):
     platform_uplink_port: int = 9200
     gpu_gtx_host: str = "127.0.0.1"
     gpu_gtx_port: int = 9101
+    platform_gtx_result_host: str = "127.0.0.1"
+    platform_gtx_result_port: int = 9102
     platform_http_url: str = "http://127.0.0.1:8001"
+    gpu_http_url: str = "http://127.0.0.1:8002"
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     yolo_api_url: str | None = None
+    yolo_model: str = "default"
+    yolo_api_key: str | None = None
     llm_api_url: str | None = None
+    llm_model: str = "gpt-4.1-mini"
+    llm_api_key: str | None = None
     provider_timeout_seconds: float = 30
+    stage_animation_seconds: float = 8.0
 
     @field_validator("database_url", mode="before")
     @classmethod

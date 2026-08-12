@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import zipfile
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,20 +14,20 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 
 from sat_simulation import __version__
 from sat_simulation.common.clock import SimulationClock
-from sat_simulation.common.link import TCPReceiver, TCPTransport
+from sat_simulation.common.link import RemoteTransferError, TCPReceiver, TCPTransport
 from sat_simulation.common.models import (
-    ClockAction,
     FaultRule,
     LinkKind,
     MissionCommand,
+    MissionPhase,
     MissionStatus,
     ProductLevel,
+    ProductManifest,
     ScenarioConfig,
-    ScenarioControl,
-    TelemetryEvent,
     TransferRecord,
     TransferStatus,
     default_link_profiles,
+    utc_now,
 )
 from sat_simulation.common.orbit import target_attitude
 from sat_simulation.common.protocol import Frame, MessageType
@@ -35,6 +38,7 @@ from sat_simulation.optical.pipeline import (
     SceneMetadata,
     SensorConfig,
     ensure_demo_scene,
+    sha256_file,
 )
 
 
@@ -44,345 +48,407 @@ class PlatformState:
         self.data_dir = app_settings.data_dir / "platform"
         self.scene_dir = self.data_dir / "scenes"
         self.product_dir = self.data_dir / "products"
-        self.receiver = TCPReceiver(self.handle_uplink)
-        self.clocks: dict[str, SimulationClock] = {}
-        self.scenarios: dict[str, ScenarioConfig] = {}
-        self.faults: dict[str, list[FaultRule]] = {}
-        self.tasks: set[asyncio.Task] = set()
+        self.task_dir = self.data_dir / "tasks"
+        self.uplink_receiver = TCPReceiver(self.handle_uplink)
+        self.result_receiver = TCPReceiver(self.handle_ai_result)
+        self.missions: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         self.scene_dir.mkdir(parents=True, exist_ok=True)
         self.product_dir.mkdir(parents=True, exist_ok=True)
+        self.task_dir.mkdir(parents=True, exist_ok=True)
         ensure_demo_scene(self.scene_dir)
-        await self.receiver.start(self.settings.host, self.settings.platform_uplink_port)
+        for path in self.task_dir.glob("*/state.json"):
+            try:
+                self.missions[path.parent.name] = json.loads(path.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+        await self.uplink_receiver.start(self.settings.host, self.settings.platform_uplink_port)
+        await self.result_receiver.start(self.settings.host, self.settings.platform_gtx_result_port)
 
     async def close(self) -> None:
-        for task in self.tasks:
-            task.cancel()
-        await self.receiver.close()
+        await self.uplink_receiver.close()
+        await self.result_receiver.close()
+
+    def persist(self, mission_id: str) -> None:
+        directory = self.task_dir / mission_id
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "state.json").write_text(
+            json.dumps(self.missions[mission_id], ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def fault_for(self, state: dict[str, Any], kind: LinkKind) -> FaultRule | None:
+        faults = [FaultRule.model_validate(value) for value in state.get("faults", [])]
+        return next((item for item in faults if item.link == kind and item.enabled), None)
+
+    def clock_for(self, simulated_at: datetime) -> SimulationClock:
+        return SimulationClock(simulated_at.astimezone(UTC), rate=1)
 
     async def handle_uplink(
         self, message_type: MessageType, payload: bytes, frame: Frame
     ) -> dict[str, Any]:
-        if message_type == MessageType.CONTROL:
-            body = unpack_json(payload)
-            await self.apply_control(
-                body["scenario_id"], ScenarioControl.model_validate(body["control"])
-            )
-            return {"controlled": True}
-        if message_type != MessageType.COMMAND:
-            raise ValueError(f"unsupported uplink message type {message_type.name}")
         body = unpack_json(payload)
-        command = MissionCommand.model_validate(body["command"])
-        scenario = ScenarioConfig.model_validate(body["scenario"])
-        faults = [FaultRule.model_validate(item) for item in body.get("faults", [])]
-        self.scenarios[scenario.id] = scenario
-        self.faults[scenario.id] = faults
-        clock = self.clocks.get(scenario.id)
-        if not clock:
-            clock = SimulationClock(scenario.epoch, scenario.clock_rate)
-            self.clocks[scenario.id] = clock
-        await clock.resume()
-        task = asyncio.create_task(self.execute(command, scenario, clock, faults))
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-        return {"accepted": True, "mission_id": command.id}
+        if message_type == MessageType.COMMAND:
+            command = MissionCommand.model_validate(body["command"])
+            scenario = ScenarioConfig.model_validate(body["scenario"])
+            self.missions[command.id] = {
+                "command": command.model_dump(mode="json"),
+                "scenario": scenario.model_dump(mode="json"),
+                "faults": body.get("faults", []),
+                "phase": MissionPhase.UPLINK_COMPLETE,
+                "products": {},
+                "received_at": datetime.now(UTC).isoformat(),
+                "clock": {
+                    "run_id": command.run_id,
+                    "simulated_at": datetime.fromtimestamp(
+                        frame.simulated_time_ns / 1_000_000_000, tz=UTC
+                    ).isoformat(),
+                    "paused": True,
+                },
+            }
+            self.persist(command.id)
+            return {"accepted": True, "mission_id": command.id, "phase": "uplink_complete"}
+        if message_type == MessageType.RESULT_REQUEST:
+            mission_id = str(body.get("mission_id"))
+            state = self.missions.get(mission_id)
+            if not state:
+                raise ValueError("mission_id is not stored on platform")
+            if state.get("phase") != MissionPhase.AI_COMPLETE:
+                raise ValueError("AI result is not ready for downlink")
+            record, manifest = await self.downlink_result_package(mission_id, state)
+            state["phase"] = MissionPhase.COMPLETED
+            state["clock"] = {
+                "run_id": state["command"]["run_id"],
+                "simulated_at": datetime.fromtimestamp(
+                    frame.simulated_time_ns / 1_000_000_000, tz=UTC
+                ).isoformat(),
+                "paused": True,
+            }
+            state["result_package"] = manifest.model_dump(mode="json")
+            self.persist(mission_id)
+            return {
+                "accepted": True,
+                "mission_id": mission_id,
+                "result_package_sha256": manifest.sha256,
+                "transfer": record.model_dump(mode="json"),
+            }
+        raise ValueError(f"unsupported uplink message type {message_type.name}")
 
-    async def apply_control(self, scenario_id: str, control: ScenarioControl) -> None:
-        clock = self.clocks.get(scenario_id)
-        if not clock:
-            return
-        if control.action in {ClockAction.START, ClockAction.RESUME}:
-            await clock.resume()
-        elif control.action == ClockAction.PAUSE:
-            await clock.pause()
-        elif control.action == ClockAction.STEP:
-            await clock.step(control.step_seconds)
-        elif control.action == ClockAction.SET_RATE:
-            await clock.set_rate(control.rate or 1)
-        elif control.action == ClockAction.RESET:
-            scenario = self.scenarios.get(scenario_id)
-            await clock.reset(scenario.epoch if scenario else None)
-
-    def fault_for(self, faults: list[FaultRule], kind: LinkKind) -> FaultRule | None:
-        return next((item for item in faults if item.link == kind and item.enabled), None)
-
-    async def event(
-        self,
-        command: MissionCommand,
-        clock: SimulationClock,
-        faults: list[FaultRule],
-        *,
-        event_type: str,
-        status: MissionStatus,
-        message: str,
-        data: dict[str, Any] | None = None,
-        provenance: str = "simulated",
-    ) -> None:
-        event = TelemetryEvent(
-            run_id=command.run_id,
-            mission_id=command.id,
-            event_type=event_type,
-            status=status,
-            message=message,
-            simulated_at=clock.now(),
-            source="platform-node",
-            data=data or {},
-            provenance=provenance,
+    async def handle_ai_result(
+        self, message_type: MessageType, payload: bytes, _frame: Frame
+    ) -> dict[str, Any]:
+        if message_type != MessageType.AI_RESULT:
+            raise ValueError(f"unsupported GTX result type {message_type.name}")
+        body = unpack_json(payload)
+        mission_id = str(body["mission_id"])
+        state = self.missions.get(mission_id)
+        if not state:
+            raise ValueError("unknown mission in AI_RESULT")
+        expected = str(body.pop("sha256"))
+        content = pack_json(body)
+        if hashlib.sha256(content).hexdigest() != expected:
+            raise ValueError("AI_RESULT SHA-256 mismatch")
+        directory = self.product_dir / mission_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{mission_id}_ai_result.json"
+        path.write_bytes(content)
+        manifest = ProductManifest(
+            run_id=str(body["run_id"]),
+            mission_id=mission_id,
+            level=ProductLevel.AI_RESULT,
+            name=path.name,
+            mime_type="application/json",
+            size_bytes=path.stat().st_size,
+            sha256=expected,
+            processing_parameters={"ai_mode": body["ai_mode"]},
+            quality={"verified": True},
+            lineage=[state["products"][ProductLevel.L1B]["name"]],
+            artifact_path=str(path),
         )
-        transport = TCPTransport(
-            profile=default_link_profiles()[LinkKind.DOWNLINK],
-            clock=clock,
-            fault=self.fault_for(faults, LinkKind.DOWNLINK),
-            seed=self.scenarios[command.scenario_id].seed,
-        )
-        await transport.send(
-            self.settings.ground_downlink_host,
-            self.settings.ground_downlink_port,
-            run_id=command.run_id,
-            mission_id=command.id,
-            message_type=MessageType.EVENT,
-            payload=pack_json(event.model_dump(mode="json")),
-        )
+        state["ai_result"] = body
+        state["products"][ProductLevel.AI_RESULT] = manifest.model_dump(mode="json")
+        self.persist(mission_id)
+        return {"stored": True, "sha256": expected}
 
-    async def execute(
-        self,
-        command: MissionCommand,
-        scenario: ScenarioConfig,
-        clock: SimulationClock,
-        faults: list[FaultRule],
-    ) -> None:
-        try:
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="command_received",
-                status=MissionStatus.UPLINKING,
-                message="星务平台已接收并校验任务指令。",
+    def scene_metadata(self, command: MissionCommand) -> tuple[Path, SceneMetadata]:
+        scene_path = self.scene_dir / f"{command.scene_id}.tif"
+        if not scene_path.exists():
+            raise FileNotFoundError(f"scene {command.scene_id} is not staged on platform")
+        with rasterio.open(scene_path) as src:
+            bounds = src.bounds
+            scene = SceneMetadata(
+                scene_id=command.scene_id,
+                target_name=command.target_name,
+                center_latitude=(bounds.top + bounds.bottom) / 2,
+                center_longitude=(bounds.left + bounds.right) / 2,
+                pixel_size_deg=abs(src.transform.a),
+                crs=str(src.crs or "EPSG:4326"),
             )
-            await clock.sleep(1)
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="attitude_maneuver_started",
-                status=MissionStatus.MANEUVERING,
-                message="开始目标指向姿态机动。",
-            )
-            await clock.sleep(3)
+        return scene_path, scene
+
+    async def advance(self, mission_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        state = self.missions.get(mission_id)
+        if not state:
+            raise HTTPException(409, "星务尚未收到该任务指令")
+        stage = str(body["stage"])
+        simulated_at = datetime.fromisoformat(str(body["simulated_at"]).replace("Z", "+00:00"))
+        command = MissionCommand.model_validate(state["command"])
+        scenario = ScenarioConfig.model_validate(state["scenario"])
+        mission_dir = self.product_dir / mission_id
+        mission_dir.mkdir(parents=True, exist_ok=True)
+        pipeline = OpticalPipeline(SensorConfig(seed=scenario.seed))
+        events: list[dict[str, Any]] = []
+
+        if stage == "capture":
+            if state["phase"] not in {MissionPhase.UPLINK_COMPLETE, MissionPhase.CAPTURE_COMPLETE}:
+                raise HTTPException(409, "星务任务阶段不允许拍摄")
             spacecraft = target_attitude(
                 scenario,
-                clock.now(),
+                simulated_at,
                 command.target_latitude,
                 command.target_longitude,
                 pointing_error_deg=0.05,
             )
             if spacecraft.pointing_error_deg > 0.1:
-                raise RuntimeError("pointing error exceeds optical capture threshold")
-            if not spacecraft.in_contact:
-                raise RuntimeError("deterministic contact window is not open")
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="optical_capture_started",
-                status=MissionStatus.CAPTURING,
-                message="姿态满足约束，光学载荷开始曝光。",
-                data={"spacecraft": spacecraft.model_dump(mode="json")},
-                provenance="derived",
+                raise HTTPException(409, "姿态指向误差超过拍摄阈值")
+            scene_path, _scene = self.scene_metadata(command)
+            manifest, path = await asyncio.to_thread(
+                pipeline.capture_raw,
+                scene_path=scene_path,
+                output_dir=mission_dir,
+                run_id=command.run_id,
+                mission_id=mission_id,
             )
-            await clock.sleep(2)
+            state["spacecraft"] = spacecraft.model_dump(mode="json")
+            state["captured_at"] = simulated_at.isoformat()
+            state["products"][ProductLevel.RAW] = manifest.model_dump(mode="json")
+            state["products"][ProductLevel.RAW]["artifact_path"] = str(path)
+            state["phase"] = MissionPhase.CAPTURE_COMPLETE
+            events.extend(
+                [
+                    {
+                        "event_type": "attitude_maneuver_completed",
+                        "status": MissionStatus.MANEUVERING,
+                        "message": "姿态机动完成，目标进入视场。",
+                        "data": {"spacecraft": spacecraft.model_dump(mode="json")},
+                    },
+                    {
+                        "event_type": "raw_stored",
+                        "status": MissionStatus.CAPTURING,
+                        "message": "曝光完成，RAW 分包数据已保存到星务卷。",
+                        "data": {"manifest": manifest.model_dump(mode="json")},
+                    },
+                ]
+            )
 
-            scene_path = self.scene_dir / f"{command.scene_id}.tif"
-            if not scene_path.exists():
-                raise FileNotFoundError(f"scene {command.scene_id} is not staged on platform")
-            with rasterio.open(scene_path) as src:
-                bounds = src.bounds
-                scene = SceneMetadata(
-                    scene_id=command.scene_id,
-                    target_name=command.target_name,
-                    center_latitude=(bounds.top + bounds.bottom) / 2,
-                    center_longitude=(bounds.left + bounds.right) / 2,
-                    pixel_size_deg=abs(src.transform.a),
-                    crs=str(src.crs or "EPSG:4326"),
-                )
-            mission_dir = self.product_dir / command.id
-            pipeline = OpticalPipeline(SensorConfig(seed=scenario.seed))
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="l0_processing_started",
-                status=MissionStatus.L0_PROCESSING,
-                message="重组 RAW 分包并生成 L0。",
-            )
+        elif stage == "processing":
+            if state["phase"] not in {
+                MissionPhase.CAPTURE_COMPLETE,
+                MissionPhase.PROCESSING_COMPLETE,
+            }:
+                raise HTTPException(409, "星务任务阶段不允许产品处理")
+            scene_path, scene = self.scene_metadata(command)
             products = await asyncio.to_thread(
                 pipeline.process,
                 scene_path=scene_path,
                 scene=scene,
                 output_dir=mission_dir,
                 run_id=command.run_id,
-                mission_id=command.id,
-                captured_at=clock.now(),
-                spacecraft_state=spacecraft.model_dump(mode="json"),
+                mission_id=mission_id,
+                captured_at=datetime.fromisoformat(state["captured_at"]),
+                spacecraft_state=state["spacecraft"],
             )
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="l1a_processing_completed",
-                status=MissionStatus.L1A_PROCESSING,
-                message="L1A 已附加时间、轨姿与定标辅助数据。",
-            )
-            l1b_manifest = next(
-                item for item in products.manifests if item.level == ProductLevel.L1B
-            )
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="l1b_processing_completed",
-                status=MissionStatus.L1B_PROCESSING,
-                message="L1B 辐射校正和地理参考产品已生成。",
-                data={"manifest": l1b_manifest.model_dump(mode="json")},
-                provenance="derived",
-            )
+            state["products"] = {
+                item.level: item.model_dump(mode="json") for item in products.manifests
+            }
+            state["phase"] = MissionPhase.PROCESSING_COMPLETE
+            for level, status in [
+                (ProductLevel.L0, MissionStatus.L0_PROCESSING),
+                (ProductLevel.L1A, MissionStatus.L1A_PROCESSING),
+                (ProductLevel.L1B, MissionStatus.L1B_PROCESSING),
+            ]:
+                events.append(
+                    {
+                        "event_type": f"{level.value}_processing_completed",
+                        "status": status,
+                        "message": f"{level.value.upper()} 产品处理并保存成功。",
+                        "data": {"manifest": state["products"][level]},
+                    }
+                )
 
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="gtx_transfer_started",
-                status=MissionStatus.GTX_TRANSFER,
-                message="经 Virtual GTX 向 GPU 载荷发送 L1B。",
-            )
-            gtx = TCPTransport(
+        elif stage == "gtx":
+            if state["phase"] not in {MissionPhase.PROCESSING_COMPLETE, MissionPhase.GTX_COMPLETE}:
+                raise HTTPException(409, "星务任务阶段不允许 GTX 传输")
+            manifest = ProductManifest.model_validate(state["products"][ProductLevel.L1B])
+            clock = self.clock_for(simulated_at)
+            transport = TCPTransport(
                 profile=default_link_profiles()[LinkKind.GTX],
                 clock=clock,
-                fault=self.fault_for(faults, LinkKind.GTX),
+                fault=self.fault_for(state, LinkKind.GTX),
                 seed=scenario.seed,
             )
-            gtx_result = await gtx.send(
+            transfer = await transport.send(
                 self.settings.gpu_gtx_host,
                 self.settings.gpu_gtx_port,
                 run_id=command.run_id,
-                mission_id=command.id,
+                mission_id=mission_id,
                 message_type=MessageType.AI_JOB,
-                payload=pack_product(l1b_manifest, products.paths[ProductLevel.L1B]),
+                payload=pack_product(manifest, Path(str(manifest.artifact_path))),
             )
-            gtx_record = TransferRecord(
-                run_id=command.run_id,
-                mission_id=command.id,
-                link=LinkKind.GTX,
-                name=l1b_manifest.name,
-                total_bytes=gtx_result.total_bytes,
-                transferred_bytes=gtx_result.total_bytes,
-                frame_count=gtx_result.frames,
-                retry_count=gtx_result.retries,
-                crc_failures=gtx_result.crc_failures,
-                sha256=l1b_manifest.sha256,
-                status=TransferStatus.COMPLETED,
-                started_at=clock.now(),
-                completed_at=clock.now(),
+            if transfer.response.get("received_sha256") != manifest.sha256:
+                raise HTTPException(502, "GPU 返回的 L1B SHA-256 不一致")
+            state["phase"] = MissionPhase.GTX_COMPLETE
+            record = self.transfer_record(
+                command, LinkKind.GTX, manifest.name, manifest.sha256, transfer
             )
-            detection = gtx_result.response.get("detection", {})
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="ai_provider_skipped",
-                status=MissionStatus.AI_SKIPPED,
-                message="GPU 已校验 L1B；本地模型服务未配置，AI 阶段诚实跳过。",
-                data={
-                    "gtx": {
-                        "bytes": gtx_result.total_bytes,
-                        "frames": gtx_result.frames,
-                        "retries": gtx_result.retries,
-                        "crc_failures": gtx_result.crc_failures,
-                    },
-                    "detection": detection,
-                },
-                provenance="placeholder",
+            events.append(
+                {
+                    "event_type": "gtx_transfer_completed",
+                    "status": MissionStatus.GTX_TRANSFER,
+                    "message": "L1B 已经真实 GTX 字节流传至 GPU 并校验。",
+                    "data": {"record": record.model_dump(mode="json")},
+                }
             )
 
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="downlink_started",
-                status=MissionStatus.DOWNLINKING,
-                message="在可见窗口内开始下传产品。",
-            )
-            downlink = TCPTransport(
-                profile=default_link_profiles()[LinkKind.DOWNLINK],
-                clock=clock,
-                fault=self.fault_for(faults, LinkKind.DOWNLINK),
-                seed=scenario.seed,
-            )
-            transfer_records = [gtx_record]
-            for manifest in products.manifests:
-                path = Path(manifest.artifact_path or "")
-                downlink_result = await downlink.send(
-                    self.settings.ground_downlink_host,
-                    self.settings.ground_downlink_port,
-                    run_id=command.run_id,
-                    mission_id=command.id,
-                    message_type=MessageType.PRODUCT,
-                    payload=pack_product(manifest, path),
-                )
-                transfer_records.append(
-                    TransferRecord(
-                        run_id=command.run_id,
-                        mission_id=command.id,
-                        link=LinkKind.DOWNLINK,
-                        name=manifest.name,
-                        total_bytes=downlink_result.total_bytes,
-                        transferred_bytes=downlink_result.total_bytes,
-                        frame_count=downlink_result.frames,
-                        retry_count=downlink_result.retries,
-                        crc_failures=downlink_result.crc_failures,
-                        sha256=manifest.sha256,
-                        status=TransferStatus.COMPLETED,
-                        started_at=clock.now(),
-                        completed_at=clock.now(),
-                    )
-                )
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="transfer_completed",
-                status=MissionStatus.DOWNLINKING,
-                message="GTX 与产品下传事务均已完成并通过完整性校验。",
-                data={"records": [record.model_dump(mode="json") for record in transfer_records]},
-                provenance="derived",
-            )
-            await self.event(
-                command,
-                clock,
-                faults,
-                event_type="mission_completed",
-                status=MissionStatus.COMPLETED,
-                message="任务、产品校验与下传全部完成。",
-                data={"product_count": len(products.manifests)},
-                provenance="derived",
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
+        elif stage == "ai":
+            if state["phase"] not in {MissionPhase.GTX_COMPLETE, MissionPhase.AI_COMPLETE}:
+                raise HTTPException(409, "星务任务阶段不允许智能分析")
+            clock = self.clock_for(simulated_at)
+            transport = TCPTransport(profile=default_link_profiles()[LinkKind.GTX], clock=clock)
             try:
-                await self.event(
-                    command,
-                    clock,
-                    faults,
-                    event_type="mission_failed",
-                    status=MissionStatus.FAILED,
-                    message=f"任务失败：{exc}",
-                    data={"error": str(exc)},
+                transfer = await transport.send(
+                    self.settings.gpu_gtx_host,
+                    self.settings.gpu_gtx_port,
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    message_type=MessageType.AI_EXECUTE,
+                    payload=pack_json(
+                        {
+                            "mission_id": mission_id,
+                            "run_id": command.run_id,
+                            "ai_mode": command.ai_mode,
+                            "options": {},
+                        }
+                    ),
                 )
-            except Exception:
-                pass
+            except RemoteTransferError as exc:
+                if exc.code == "provider_blocked":
+                    raise HTTPException(423, str(exc)) from exc
+                raise
+            if "ai_result" not in state:
+                raise HTTPException(502, "GPU 未通过 GTX 回传 AI_RESULT")
+            state["phase"] = MissionPhase.AI_COMPLETE
+            events.append(
+                {
+                    "event_type": "ai_result_stored",
+                    "status": MissionStatus.AI_PROCESSING,
+                    "message": "GPU 模型结果已通过 GTX 回传并由星务持久化。",
+                    "data": {"result": state["ai_result"], "gtx_bytes": transfer.total_bytes},
+                }
+            )
+        else:
+            raise HTTPException(400, "unknown platform stage")
+
+        state["clock"] = {
+            "run_id": command.run_id,
+            "simulated_at": simulated_at.isoformat(),
+            "paused": True,
+        }
+        self.persist(mission_id)
+        return {
+            "phase": state["phase"],
+            "events": events,
+            "products": list(state["products"].values()),
+        }
+
+    @staticmethod
+    def transfer_record(
+        command: MissionCommand, link: LinkKind, name: str, sha256: str, result
+    ) -> TransferRecord:
+        return TransferRecord(
+            run_id=command.run_id,
+            mission_id=command.id,
+            link=link,
+            name=name,
+            total_bytes=result.total_bytes,
+            transferred_bytes=result.total_bytes,
+            frame_count=result.frames,
+            retry_count=result.retries,
+            crc_failures=result.crc_failures,
+            sha256=sha256,
+            status=TransferStatus.COMPLETED,
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        )
+
+    async def downlink_result_package(
+        self, mission_id: str, state: dict[str, Any]
+    ) -> tuple[TransferRecord, ProductManifest]:
+        command = MissionCommand.model_validate(state["command"])
+        scenario = ScenarioConfig.model_validate(state["scenario"])
+        directory = self.product_dir / mission_id
+        package_path = directory / f"{mission_id}_result_package.zip"
+        include_levels = [ProductLevel.AI_RESULT, ProductLevel.THUMBNAIL, ProductLevel.STAC]
+        member_index: dict[str, str] = {}
+        summary = {
+            "mission_id": mission_id,
+            "run_id": command.run_id,
+            "ai_mode": command.ai_mode,
+            "planned_windows": command.planned_windows.model_dump(mode="json")
+            if command.planned_windows
+            else None,
+            "products": list(state["products"].values()),
+        }
+        summary_path = directory / "mission_summary.json"
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), "utf-8")
+        with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            files = [summary_path]
+            for level in include_levels:
+                value = state["products"].get(level)
+                if value and value.get("artifact_path"):
+                    files.append(Path(value["artifact_path"]))
+            for file_path in files:
+                digest = sha256_file(file_path)
+                member_index[file_path.name] = digest
+                archive.write(file_path, file_path.name)
+            checksums_content = json.dumps(member_index, sort_keys=True).encode("utf-8")
+            archive.writestr("checksums.json", checksums_content)
+            member_index["checksums.json"] = hashlib.sha256(checksums_content).hexdigest()
+        manifest = ProductManifest(
+            run_id=command.run_id,
+            mission_id=mission_id,
+            level=ProductLevel.RESULT_PACKAGE,
+            name=package_path.name,
+            mime_type="application/zip",
+            size_bytes=package_path.stat().st_size,
+            sha256=sha256_file(package_path),
+            processing_parameters={"members": member_index},
+            quality={"member_sha256_verified": True},
+            lineage=list(member_index),
+            artifact_path=str(package_path),
+        )
+        clock = self.clock_for(
+            command.planned_windows.downlink.max_elevation_at
+            if command.planned_windows
+            else utc_now()
+        )
+        transport = TCPTransport(
+            profile=default_link_profiles()[LinkKind.DOWNLINK],
+            clock=clock,
+            fault=self.fault_for(state, LinkKind.DOWNLINK),
+            seed=scenario.seed,
+        )
+        result = await transport.send(
+            self.settings.ground_downlink_host,
+            self.settings.ground_downlink_port,
+            run_id=command.run_id,
+            mission_id=mission_id,
+            message_type=MessageType.RESULT_PACKAGE,
+            payload=pack_product(manifest, package_path),
+        )
+        return self.transfer_record(
+            command, LinkKind.DOWNLINK, manifest.name, manifest.sha256, result
+        ), manifest
 
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
@@ -404,18 +470,20 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             "service": "platform-node",
             "version": __version__,
             "uplink_listener": app_settings.platform_uplink_port,
-            "payloads": {
-                "optical": "ready",
-                "infrared": "not_implemented",
-            },
+            "gtx_result_listener": app_settings.platform_gtx_result_port,
+            "payloads": {"optical": "ready", "infrared": "not_implemented"},
         }
 
-    @app.post("/internal/control")
-    async def control(body: dict[str, Any]) -> dict[str, bool]:
-        await state.apply_control(
-            str(body["scenario_id"]), ScenarioControl.model_validate(body["control"])
-        )
-        return {"ok": True}
+    @app.post("/internal/missions/{mission_id}/advance")
+    async def advance(mission_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        return await state.advance(mission_id, body)
+
+    @app.get("/internal/missions/{mission_id}")
+    async def mission_state(mission_id: str) -> dict[str, Any]:
+        value = state.missions.get(mission_id)
+        if not value:
+            raise HTTPException(404, "mission not found")
+        return value
 
     @app.post("/internal/scenes")
     async def stage_scene(

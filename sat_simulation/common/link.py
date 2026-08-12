@@ -44,6 +44,12 @@ class TransferResult:
     response: dict[str, Any]
 
 
+class RemoteTransferError(RuntimeError):
+    def __init__(self, message: str, *, code: str = "remote_error") -> None:
+        super().__init__(message)
+        self.code = code
+
+
 Handler = Callable[[MessageType, bytes, Frame], Awaitable[dict[str, Any]]]
 
 
@@ -60,6 +66,15 @@ class TCPTransport:
         self.clock = clock
         self.fault = fault
         self.rng = random.Random(seed)
+
+    async def _wait(self, simulated_seconds: float) -> None:
+        """Advance an explicitly-triggered transfer even while the run is paused."""
+        if simulated_seconds <= 0:
+            return
+        if self.clock.state().paused:
+            await self.clock.step(simulated_seconds)
+        else:
+            await self.clock.sleep(simulated_seconds)
 
     async def send(
         self,
@@ -131,7 +146,7 @@ class TCPTransport:
                     if corrupt:
                         crc_failures += 1
                     serialization = len(encoded) * 8 / self.profile.bandwidth_bps
-                    await self.clock.sleep(serialization)
+                    await self._wait(serialization)
 
                 eof = Frame(
                     link=link_code(self.profile.kind),
@@ -149,10 +164,14 @@ class TCPTransport:
                 writer.write(eof.encode())
                 await writer.drain()
                 extra_ms = self.fault.extra_latency_ms if self.fault and self.fault.enabled else 0
-                await self.clock.sleep((self.profile.latency_ms + extra_ms) / 1000)
+                await self._wait((self.profile.latency_ms + extra_ms) / 1000)
 
                 reply = await read_frame(reader)
                 response = json.loads(reply.payload.decode("utf-8"))
+                if reply.message_type == MessageType.NAK and response.get("error"):
+                    raise RemoteTransferError(
+                        str(response["error"]), code=str(response.get("error_code", "remote_error"))
+                    )
                 missing = {int(item) for item in response.get("missing", [])}
                 if not missing:
                     pending.clear()
@@ -235,6 +254,18 @@ class TCPReceiver:
                 chunks[frame.sequence] = frame.payload
         except (asyncio.IncompleteReadError, ConnectionError, ProtocolError):
             pass
+        except Exception as exc:
+            if first is not None:
+                await self._reply(
+                    writer,
+                    first,
+                    MessageType.NAK,
+                    {
+                        "missing": [],
+                        "error": str(exc),
+                        "error_code": getattr(exc, "code", "handler_error"),
+                    },
+                )
         finally:
             writer.close()
             await writer.wait_closed()

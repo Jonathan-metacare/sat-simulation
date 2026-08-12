@@ -118,6 +118,32 @@ class OpticalPipeline:
     def __init__(self, sensor: SensorConfig | None = None) -> None:
         self.sensor = sensor or SensorConfig()
 
+    def capture_raw(
+        self,
+        *,
+        scene_path: Path,
+        output_dir: Path,
+        run_id: str,
+        mission_id: str,
+    ) -> tuple[ProductManifest, Path]:
+        """Simulate detector packets only; later processing consumes this exact file."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(scene_path) as src:
+            truth = src.read().astype(np.float64) / 65535.0
+        dn, _bad_mask = self._simulate_detector(truth)
+        raw_path = output_dir / f"{mission_id}_raw.bin"
+        self._write_raw(raw_path, dn)
+        manifest = self._manifest(
+            path=raw_path,
+            level=ProductLevel.RAW,
+            mime="application/octet-stream",
+            run_id=run_id,
+            mission_id=mission_id,
+            lineage=[],
+            quality={"packet_count": int(dn.shape[0] * dn.shape[1])},
+        )
+        return manifest, raw_path
+
     def process(
         self,
         *,
@@ -139,7 +165,8 @@ class OpticalPipeline:
         dn, bad_mask = self._simulate_detector(truth)
 
         raw_path = output_dir / f"{mission_id}_raw.bin"
-        self._write_raw(raw_path, dn)
+        if not raw_path.exists():
+            self._write_raw(raw_path, dn)
         l0 = self._read_raw(raw_path, dn.shape)
         l0_path = output_dir / f"{mission_id}_l0.npy"
         np.save(l0_path, l0, allow_pickle=False)
