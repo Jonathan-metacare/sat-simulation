@@ -72,6 +72,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenarios/import/yaml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Scenario Yaml */
+        post: operations["import_scenario_yaml_api_scenarios_import_yaml_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenarios": {
         parameters: {
             query?: never;
@@ -424,6 +441,11 @@ export interface components {
          * @enum {string}
          */
         AIMode: "yolo" | "llm";
+        /** Body_import_scenario_yaml_api_scenarios_import_yaml_post */
+        Body_import_scenario_yaml_api_scenarios_import_yaml_post: {
+            /** File */
+            file: string;
+        };
         /** Body_import_scene_api_scenes_import_post */
         Body_import_scene_api_scenes_import_post: {
             /** File */
@@ -510,6 +532,34 @@ export interface components {
          * @enum {string}
          */
         LinkKind: "gtx" | "uplink" | "downlink";
+        /** LinkProfile */
+        LinkProfile: {
+            kind: components["schemas"]["LinkKind"];
+            /** Bandwidth Bps */
+            bandwidth_bps: number;
+            /** Latency Ms */
+            latency_ms: number;
+            /**
+             * Jitter Ms
+             * @default 0
+             */
+            jitter_ms: number;
+            /**
+             * Frame Payload Bytes
+             * @default 65536
+             */
+            frame_payload_bytes: number;
+            /**
+             * Queue Capacity Bytes
+             * @default 268435456
+             */
+            queue_capacity_bytes: number;
+            /**
+             * Max Retries
+             * @default 5
+             */
+            max_retries: number;
+        };
         /** MissionAdvance */
         MissionAdvance: {
             /** Idempotency Key */
@@ -576,6 +626,7 @@ export interface components {
              * @default 识别图像中的主要地物、目标和异常，说明判断依据与不确定性。
              */
             analysis_prompt: string;
+            scenario_snapshot?: components["schemas"]["ScenarioConfig"] | null;
             planned_windows?: components["schemas"]["PlannedWindows"] | null;
         };
         /** MissionCreate */
@@ -1062,6 +1113,16 @@ export interface components {
              * @default demo-optical-scene
              */
             scene_id: string;
+            /**
+             * Scene Ready
+             * @default true
+             */
+            scene_ready: boolean;
+            /** Links */
+            links?: {
+                [key: string]: components["schemas"]["LinkProfile"];
+            };
+            sensor?: components["schemas"]["SensorSettings"];
         };
         /** ScenarioControl */
         ScenarioControl: {
@@ -1073,6 +1134,57 @@ export interface components {
              * @default 1
              */
             step_seconds: number;
+        };
+        /**
+         * SensorSettings
+         * @description Validated optical-sensor parameters frozen with a scenario.
+         */
+        SensorSettings: {
+            /**
+             * Bit Depth
+             * @default 12
+             */
+            bit_depth: number;
+            /**
+             * Gain
+             * @default 1
+             */
+            gain: number;
+            /**
+             * Offset Dn
+             * @default 32
+             */
+            offset_dn: number;
+            /**
+             * Dark Current Dn
+             * @default 4
+             */
+            dark_current_dn: number;
+            /**
+             * Read Noise Dn
+             * @default 0
+             */
+            read_noise_dn: number;
+            /**
+             * Prnu Sigma
+             * @default 0
+             */
+            prnu_sigma: number;
+            /**
+             * Bad Pixel Rate
+             * @default 0
+             */
+            bad_pixel_rate: number;
+            /**
+             * Stripe Amplitude Dn
+             * @default 0
+             */
+            stripe_amplitude_dn: number;
+            /**
+             * Line Period Ms
+             * @default 1
+             */
+            line_period_ms: number;
         };
         /** TelemetryEvent */
         TelemetryEvent: {
@@ -1258,6 +1370,7 @@ export interface operations {
         parameters: {
             query: {
                 scene_id: string;
+                scenario_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -1266,6 +1379,41 @@ export interface operations {
         requestBody: {
             content: {
                 "multipart/form-data": components["schemas"]["Body_import_scene_api_scenes_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_scenario_yaml_api_scenarios_import_yaml_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_scenario_yaml_api_scenarios_import_yaml_post"];
             };
         };
         responses: {

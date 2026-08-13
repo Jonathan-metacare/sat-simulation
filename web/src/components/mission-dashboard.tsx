@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Activity, ActivitySquare, AlertTriangle, Clock3, Database, FileImage, Gauge,
-  Languages, LoaderCircle, Moon, Orbit, Radio, Settings2, StepForward, Sun, Zap
+  ChevronDown, LoaderCircle, Orbit, Radio, Settings2, StepForward, Zap
 } from "lucide-react";
 
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
@@ -19,7 +19,8 @@ import { NodeTab } from "./node-tab";
 import { ProtocolInspector } from "./protocol-inspector";
 import { OrbitGlobe } from "./orbit-globe";
 import { SystemTopology } from "./system-topology";
-import { DesktopSettingsPanel, isDesktopApp } from "./desktop-settings";
+import { DesktopSettingsPanel } from "./desktop-settings";
+import { desktopBridge } from "~/lib/desktop";
 
 const stages: Array<[MissionPhase, Parameters<typeof translate>[1]]> = [
   ["initialized", "stage.initialized"], ["uplink_complete", "stage.uplink_complete"],
@@ -90,7 +91,8 @@ export function MissionDashboard() {
   const [activeTab, setActiveTab] = useState<NodeKind>("ground");
   const [missionPanelOpen, setMissionPanelOpen] = useState(false);
   const [desktopSettingsOpen, setDesktopSettingsOpen] = useState(false);
-  const [desktopAvailable, setDesktopAvailable] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"general" | "plugins" | "ai" | "scene" | "about">("general");
   const missionId = mission?.command.id;
   const runId = mission?.command.run_id;
   const scenarioId = scenario?.config.id;
@@ -100,7 +102,15 @@ export function MissionDashboard() {
   const eventListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setDesktopAvailable(isDesktopApp());
+    const bridge = desktopBridge();
+    if (bridge) {
+      void bridge.getSettings().then((saved) => {
+        setLocale(saved.locale);
+        setTheme(saved.theme);
+        setAiMode(saved.activeAiMode);
+      });
+      return;
+    }
     const savedLocale = window.localStorage.getItem("sat-sim-locale");
     const savedTheme = window.localStorage.getItem("sat-sim-theme");
     if (savedLocale === "zh" || savedLocale === "en") setLocale(savedLocale);
@@ -221,6 +231,11 @@ export function MissionDashboard() {
     setMission(await api.mission(mission.command.id));
   });
   const missionCompleted = mission?.execution_state === "completed" || mission?.phase === "completed";
+  const openSettings = (section: "general" | "plugins" | "ai" | "scene" | "about") => {
+    setSettingsSection(section);
+    setSettingsMenuOpen(false);
+    setDesktopSettingsOpen(true);
+  };
   const advanceLabel = missionCompleted
     ? t("controls.missionCompleted")
     : localizedMissionAction(t, mission?.next_action) ?? t("controls.createFirst");
@@ -270,18 +285,16 @@ export function MissionDashboard() {
           <h1 className="text-2xl font-semibold tracking-tight text-slate-50 lg:text-3xl">{t("app.title")}</h1>
           <p className="mt-1 text-xs text-slate-500">{t("app.subtitle")}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="status-pulse mr-2 text-xs text-emerald-200">{t("app.online")} · v{config?.version}</span>
-          <Button onClick={() => setLocale(locale === "zh" ? "en" : "zh")}><Languages size={14} />{locale === "zh" ? t("locale.en") : t("locale.zh")}</Button>
-          <Button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}{theme === "dark" ? t("theme.light") : t("theme.dark")}</Button>
-          {desktopAvailable && <Button onClick={() => setDesktopSettingsOpen(true)}><Settings2 size={14} />{locale === "zh" ? "桌面设置" : "Desktop Settings"}</Button>}
-          <Button onClick={() => setMissionPanelOpen((open) => !open)} active><ActivitySquare size={14} />{t("actions.missionPanel")}</Button>
+        <div className="relative flex flex-wrap items-center gap-2">
+          <Button onClick={() => setSettingsMenuOpen((open) => !open)} active={settingsMenuOpen}><Settings2 size={14} /><ChevronDown size={13} /></Button>
+          {settingsMenuOpen && <div className="absolute right-0 top-10 z-[55] min-w-40 rounded-xl border border-cyan-200/15 bg-slate-950/95 p-1.5 shadow-xl shadow-black/50 backdrop-blur"><button onClick={() => openSettings("general")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "通用" : "General"}</button><button onClick={() => openSettings("plugins")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "插件与密钥" : "Plugins & Keys"}</button><button onClick={() => openSettings("ai")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">AI</button><button onClick={() => openSettings("scene")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "场景导入" : "Scene Import"}</button><button onClick={() => openSettings("about")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "关于" : "About"}</button></div>}
+          <Button onClick={() => setMissionPanelOpen((open) => !open)} active><ActivitySquare size={14} /></Button>
         </div>
       </header>
 
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
-      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} />
+      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} onAiMode={setAiMode} initialSection={settingsSection} onScenarioImported={() => void reload()} />
       <aside aria-label="任务控制面板" className={`mission-drawer fixed inset-y-0 right-0 z-50 flex w-full max-w-none flex-col border-l border-cyan-300/20 shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex items-center justify-between border-b border-cyan-200/10 px-5 py-4">
           <div><div className="text-sm font-medium text-cyan-100">{t("panel.title")}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{t("panel.subtitle")}</div></div>
@@ -402,10 +415,7 @@ export function MissionDashboard() {
           <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
             <div className="mb-1 text-lg font-medium text-slate-50">{t("mission.createTitle")}</div>
             <p className="mb-5 text-xs leading-5 text-slate-500">{mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("mission.createReplaceDesc") : t("mission.createDesc")}</p>
-            <div className="mb-5 grid grid-cols-2 gap-3">
-              <button onClick={() => setAiMode("yolo")} className={`rounded-xl border p-4 text-left ${aiMode === "yolo" ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-black/20"}`}><div className="text-sm text-slate-100">{t("mission.yolo")}</div><div className="mt-1 text-[10px] text-slate-500">{t("mission.yoloHint")}</div></button>
-              <button onClick={() => setAiMode("llm")} className={`rounded-xl border p-4 text-left ${aiMode === "llm" ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-black/20"}`}><div className="text-sm text-slate-100">{t("mission.llm")}</div><div className="mt-1 text-[10px] text-slate-500">{t("mission.llmHint")}</div></button>
-            </div>
+            <div className="mb-5 rounded-xl border border-cyan-300/20 bg-cyan-300/[.06] p-3 text-xs text-slate-300">{locale === "zh" ? `本任务将使用设置中选择的 ${aiMode.toUpperCase()}。可在 设置 → AI 中切换。` : `This mission will use ${aiMode.toUpperCase()} selected in Settings → AI.`}</div>
             {aiMode === "llm" && <div className="mb-5 space-y-3">
               <label className="block text-xs text-slate-400">{t("mission.projectContext")}<textarea value={projectContext} onChange={(event) => setProjectContext(event.target.value)} maxLength={4000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.projectPlaceholder")} /></label>
               <label className="block text-xs text-slate-400">{t("mission.analysisPrompt")}<textarea value={analysisPrompt} onChange={(event) => setAnalysisPrompt(event.target.value)} maxLength={2000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.promptPlaceholder")} /></label>

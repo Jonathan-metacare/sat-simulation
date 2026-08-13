@@ -17,7 +17,16 @@ export interface ScenarioConfig {
   tle_line1: string; tle_line2: string; satellite_name: string;
   ground_station_name: string; ground_station_latitude: number;
   ground_station_longitude: number; ground_station_altitude_m: number;
-  deterministic_contact: boolean; scene_id: string;
+  deterministic_contact: boolean; scene_id: string; scene_ready: boolean;
+  links: Record<"gtx" | "uplink" | "downlink", {
+    kind: "gtx" | "uplink" | "downlink"; bandwidth_bps: number; latency_ms: number;
+    jitter_ms: number; frame_payload_bytes: number; queue_capacity_bytes: number; max_retries: number;
+  }>;
+  sensor: {
+    bit_depth: number; gain: number; offset_dn: number; dark_current_dn: number;
+    read_noise_dn: number; prnu_sigma: number; bad_pixel_rate: number;
+    stripe_amplitude_dn: number; line_period_ms: number;
+  };
 }
 export interface ClockState {
   run_id: string; simulated_at: string; rate: 1 | 10 | 100;
@@ -37,6 +46,7 @@ export interface MissionCommand {
   target_name: string; target_latitude: number; target_longitude: number;
   requested_at: string; scene_id: string; enable_ai: boolean;
   ai_mode: AIMode; project_context: string; analysis_prompt: string;
+  scenario_snapshot?: ScenarioConfig;
   planned_windows: PlannedWindows;
 }
 export interface TelemetryEvent {

@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -99,23 +99,6 @@ class ProtocolTransactionStatus(StrEnum):
     FAILED = "failed"
 
 
-class ScenarioConfig(BaseModel):
-    id: str = Field(default_factory=lambda: new_id("scenario"))
-    name: str = "北京光学任务演示"
-    seed: int = 20260811
-    epoch: datetime = Field(default_factory=utc_now)
-    clock_rate: Literal[1, 10, 100] = 10
-    tle_line1: str = "1 55244U 23006C   26126.66766851  .00004587  00000-0  24048-3 0  9998"
-    tle_line2: str = "2 55244  43.1978 352.6432 0015896 112.1710 248.0829 15.16807012183579"
-    satellite_name: str = "SIM-OPTICAL-01"
-    ground_station_name: str = "GS-DEMO-BEIJING"
-    ground_station_latitude: float = 39.9042
-    ground_station_longitude: float = 116.4074
-    ground_station_altitude_m: float = 50.0
-    deterministic_contact: bool = True
-    scene_id: str = "demo-optical-scene"
-
-
 class SimulationClockState(BaseModel):
     run_id: str
     simulated_at: datetime
@@ -156,6 +139,90 @@ def default_link_profiles() -> dict[LinkKind, LinkProfile]:
     }
 
 
+class SensorSettings(BaseModel):
+    """Validated optical-sensor parameters frozen with a scenario."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bit_depth: int = Field(default=12, ge=8, le=16)
+    gain: float = Field(default=1.0, gt=0, le=100)
+    offset_dn: float = Field(default=32.0, ge=0, le=65535)
+    dark_current_dn: float = Field(default=4.0, ge=0, le=65535)
+    read_noise_dn: float = Field(default=0.0, ge=0, le=65535)
+    prnu_sigma: float = Field(default=0.0, ge=0, le=1)
+    bad_pixel_rate: float = Field(default=0.0, ge=0, le=1)
+    stripe_amplitude_dn: float = Field(default=0.0, ge=0, le=65535)
+    line_period_ms: float = Field(default=1.0, gt=0, le=1000)
+
+
+class ScenarioConfig(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("scenario"))
+    name: str = "北京光学任务演示"
+    seed: int = 20260811
+    epoch: datetime = Field(default_factory=utc_now)
+    clock_rate: Literal[1, 10, 100] = 10
+    tle_line1: str = "1 55244U 23006C   26126.66766851  .00004587  00000-0  24048-3 0  9998"
+    tle_line2: str = "2 55244  43.1978 352.6432 0015896 112.1710 248.0829 15.16807012183579"
+    satellite_name: str = "SIM-OPTICAL-01"
+    ground_station_name: str = "GS-DEMO-BEIJING"
+    ground_station_latitude: float = Field(default=39.9042, ge=-90, le=90)
+    ground_station_longitude: float = Field(default=116.4074, ge=-180, le=180)
+    ground_station_altitude_m: float = Field(default=50.0, ge=-1000, le=100000)
+    deterministic_contact: bool = True
+    scene_id: str = "demo-optical-scene"
+    scene_ready: bool = True
+    links: dict[LinkKind, LinkProfile] = Field(default_factory=default_link_profiles)
+    sensor: SensorSettings = Field(default_factory=SensorSettings)
+
+    def link_profile(self, kind: LinkKind) -> LinkProfile:
+        return self.links.get(kind, default_link_profiles()[kind])
+
+
+class StrictScenarioModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ImportedLinkProfile(StrictScenarioModel):
+    bandwidth_bps: float = Field(gt=0)
+    latency_ms: float = Field(ge=0)
+    jitter_ms: float = Field(default=0, ge=0)
+    frame_payload_bytes: int | None = Field(default=None, ge=256, le=1024 * 1024)
+    queue_capacity_bytes: int | None = Field(default=None, ge=1024)
+    max_retries: int | None = Field(default=None, ge=0, le=20)
+
+
+class ImportedLinks(StrictScenarioModel):
+    gtx: ImportedLinkProfile
+    uplink: ImportedLinkProfile
+    downlink: ImportedLinkProfile
+
+
+class ImportedSatellite(StrictScenarioModel):
+    name: str = Field(min_length=1, max_length=120)
+    tle_line1: str = Field(min_length=2, max_length=100)
+    tle_line2: str = Field(min_length=2, max_length=100)
+
+
+class ImportedGroundStation(StrictScenarioModel):
+    id: str = Field(min_length=1, max_length=120)
+    simulated: bool
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    altitude_m: float = Field(ge=-1000, le=100000)
+
+
+class ImportedScenarioYaml(StrictScenarioModel):
+    schema_version: Literal[1]
+    name: str = Field(min_length=1, max_length=200)
+    seed: int = Field(ge=0, le=2**63 - 1)
+    clock_rate: Literal[1, 10, 100]
+    satellite: ImportedSatellite
+    ground_station: ImportedGroundStation
+    links: ImportedLinks
+    sensor: SensorSettings
+    scene_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
 class FaultRule(BaseModel):
     id: str = Field(default_factory=lambda: new_id("fault"))
     link: LinkKind
@@ -187,6 +254,7 @@ class MissionCommand(BaseModel):
         default="识别图像中的主要地物、目标和异常，说明判断依据与不确定性。",
         max_length=2000,
     )
+    scenario_snapshot: ScenarioConfig | None = None
     planned_windows: PlannedWindows | None = None
 
 

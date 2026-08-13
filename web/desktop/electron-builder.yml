@@ -6,7 +6,7 @@ directories:
   buildResources: desktop/build
 files:
   - desktop/main.mjs
-  - desktop/preload.mjs
+  - desktop/preload.cjs
   - package.json
   - "!node_modules/.cache/**"
 asar: true

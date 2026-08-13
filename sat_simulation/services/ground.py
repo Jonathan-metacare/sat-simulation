@@ -13,7 +13,10 @@ from uuid import uuid4
 
 import httpx
 import rasterio
+import yaml
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from pydantic import ValidationError
+from sgp4.api import Satrec
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
@@ -40,12 +43,14 @@ from sat_simulation.common.models import (
     ProductManifest,
     ProtocolFrameTrace,
     ProtocolTransaction,
+    ImportedScenarioYaml,
     ScenarioConfig,
     ScenarioControl,
     TelemetryEvent,
     TransferRecord,
     TransferStatus,
     default_link_profiles,
+    new_id,
     utc_now,
 )
 from sat_simulation.common.orbit import orbit_track, plan_mission_windows
@@ -322,7 +327,7 @@ class GroundState:
             (item for item in faults if item.link == LinkKind.UPLINK and item.enabled), None
         )
         transport = TCPTransport(
-            profile=default_link_profiles()[LinkKind.UPLINK],
+            profile=scenario.link_profile(LinkKind.UPLINK),
             clock=clock,
             fault=fault,
             seed=scenario.seed,
@@ -665,10 +670,20 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
     @app.post("/api/scenes/import")
     async def import_scene(
-        file: UploadFile = File(...), scene_id: str = Query(..., min_length=1, max_length=120)
+        file: UploadFile = File(...),
+        scene_id: str = Query(..., min_length=1, max_length=120),
+        scenario_id: str | None = Query(default=None, min_length=1, max_length=120),
     ) -> dict[str, Any]:
         if not file.filename or not file.filename.lower().endswith((".tif", ".tiff")):
             raise HTTPException(400, "Only 16-bit GeoTIFF scenes are accepted.")
+        scenario_config: ScenarioConfig | None = None
+        if scenario_id:
+            stored = await state.repo.get_scenario(scenario_id)
+            if not stored:
+                raise HTTPException(404, "Scenario not found.")
+            scenario_config, _clock = stored
+            if scenario_config.scene_id != scene_id:
+                raise HTTPException(422, "GeoTIFF scene_id does not match the selected scenario.")
         path = state.scene_dir / f"{scene_id}.tif"
         content = await file.read()
         path.write_bytes(content)
@@ -697,7 +712,79 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         await state.repo.add_scene(
             scene_id=scene_id, name=file.filename, path=str(path), sha256=digest, metadata=metadata
         )
-        return {"id": scene_id, "sha256": digest, "metadata": metadata}
+        if scenario_config:
+            scenario_config.scene_ready = True
+            await state.repo.update_scenario_config(scenario_config)
+        return {"id": scene_id, "sha256": digest, "metadata": metadata, "scene_ready": bool(scenario_id)}
+
+    @app.post("/api/scenarios/import/yaml")
+    async def import_scenario_yaml(file: UploadFile = File(...)) -> dict[str, Any]:
+        if not file.filename or not file.filename.lower().endswith((".yaml", ".yml")):
+            raise HTTPException(400, "Only YAML scenario configuration files are accepted.")
+        try:
+            payload = yaml.safe_load((await file.read()).decode("utf-8"))
+        except (UnicodeDecodeError, yaml.YAMLError) as exc:
+            raise HTTPException(422, f"Invalid YAML: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "Scenario YAML root must be a mapping.")
+        try:
+            imported = ImportedScenarioYaml.model_validate(payload)
+        except ValidationError as exc:
+            raise HTTPException(
+                422,
+                detail=[
+                    {"path": ".".join(str(part) for part in error["loc"]), "message": error["msg"]}
+                    for error in exc.errors()
+                ],
+            ) from exc
+        try:
+            satellite = Satrec.twoline2rv(imported.satellite.tle_line1, imported.satellite.tle_line2)
+            if satellite.error:
+                raise ValueError(f"SGP4 error code {satellite.error}")
+        except Exception as exc:
+            raise HTTPException(
+                422,
+                detail=[{"path": "satellite.tle_line1", "message": f"Invalid TLE: {exc}"}],
+            ) from exc
+        scenario_id = new_id("scenario")
+        scene_id = imported.scene_id or f"{scenario_id}-scene"
+        defaults = default_link_profiles()
+        links = {
+            kind: defaults[kind].model_copy(
+                update={key: value for key, value in source.model_dump().items() if value is not None}
+            )
+            for kind, source in (
+                (LinkKind.GTX, imported.links.gtx),
+                (LinkKind.UPLINK, imported.links.uplink),
+                (LinkKind.DOWNLINK, imported.links.downlink),
+            )
+        }
+        config = ScenarioConfig(
+            id=scenario_id,
+            name=imported.name,
+            seed=imported.seed,
+            clock_rate=imported.clock_rate,
+            tle_line1=imported.satellite.tle_line1,
+            tle_line2=imported.satellite.tle_line2,
+            satellite_name=imported.satellite.name,
+            ground_station_name=imported.ground_station.id,
+            ground_station_latitude=imported.ground_station.latitude,
+            ground_station_longitude=imported.ground_station.longitude,
+            ground_station_altitude_m=imported.ground_station.altitude_m,
+            deterministic_contact=imported.ground_station.simulated,
+            scene_id=scene_id,
+            scene_ready=False,
+            links=links,
+            sensor=imported.sensor,
+        )
+        clock = SimulationClock(config.epoch, config.clock_rate)
+        state.clocks[config.id] = clock
+        await state.repo.create_scenario(config, clock.state())
+        return {
+            "config": config,
+            "clock": clock.state(),
+            "validation": {"status": "valid", "scene_ready": False, "required_scene_id": scene_id},
+        }
 
     @app.post("/api/scenarios")
     async def create_scenario(config: ScenarioConfig) -> dict[str, Any]:
@@ -753,6 +840,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         if active:
             raise HTTPException(409, f"场景已有非终态任务 {active}")
         scenario = stored[0]
+        if not scenario.scene_ready:
+            raise HTTPException(409, "Scenario image is not ready. Import the matching 16-bit GeoTIFF first.")
         plan = plan_mission_windows(scenario, max(scenario.epoch, utc_now()))
         clock = await state.clock_for(request.scenario_id)
         initial = plan.uplink.aos - timedelta(minutes=5)
@@ -765,11 +854,12 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             target_name=plan.target_name,
             target_latitude=plan.target_latitude,
             target_longitude=plan.target_longitude,
-            scene_id=request.scene_id,
+            scene_id=scenario.scene_id,
             enable_ai=True,
             ai_mode=request.ai_mode,
             project_context=request.project_context,
             analysis_prompt=request.analysis_prompt,
+            scenario_snapshot=scenario,
             planned_windows=plan,
         )
         await state.repo.create_mission(command)

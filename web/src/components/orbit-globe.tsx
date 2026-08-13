@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type * as Cesium from "cesium";
 
 import { translate } from "~/lib/i18n";
 import type { Locale } from "~/lib/store";
 import type { OrbitSample, OrbitTrack } from "~/lib/types";
+import { desktopBridge } from "~/lib/desktop";
 
 interface OrbitGlobeProps {
   track?: OrbitTrack;
@@ -221,8 +222,14 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
   const element = useRef<HTMLDivElement>(null);
   const viewer = useRef<Cesium.Viewer | undefined>(undefined);
   const cesium = useRef<typeof Cesium | undefined>(undefined);
+  const [desktopIonToken, setDesktopIonToken] = useState<string>();
   const latestInputs = useRef<SceneInputs>({ track, station, target });
   latestInputs.current = { track, station, target, locale };
+
+  useEffect(() => {
+    const bridge = desktopBridge();
+    if (bridge) void bridge.getSettings().then((saved) => setDesktopIonToken(saved.cesiumIonToken));
+  }, []);
 
   useEffect(() => {
     if (!element.current) return;
@@ -231,7 +238,7 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
       window.CESIUM_BASE_URL = process.env.NEXT_PUBLIC_CESIUM_BASE_URL ?? "/cesium/";
       const C = await import("cesium");
       if (disposed || !element.current) return;
-      const ionAccessToken = process.env.NEXT_PUBLIC_CESIUM_ION_ACCESS_TOKEN;
+      const ionAccessToken = desktopIonToken || process.env.NEXT_PUBLIC_CESIUM_ION_ACCESS_TOKEN;
       if (ionAccessToken) C.Ion.defaultAccessToken = ionAccessToken;
       const instance = new C.Viewer(element.current, {
         animation: false,
@@ -265,7 +272,7 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
       viewer.current = undefined;
       cesium.current = undefined;
     };
-  }, []);
+  }, [desktopIonToken]);
 
   useEffect(() => {
     if (viewer.current && cesium.current) {

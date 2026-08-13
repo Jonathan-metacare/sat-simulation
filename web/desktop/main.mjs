@@ -10,6 +10,10 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const webDirectory = path.resolve(directory, "..");
 const projectDirectory = path.resolve(webDirectory, "..");
 const defaultSettings = {
+  locale: "zh",
+  theme: "dark",
+  activeAiMode: "yolo",
+  cesiumIonToken: "",
   llmApiUrl: "http://127.0.0.1:11434",
   llmModel: "",
   llmApiKey: "",
@@ -22,6 +26,7 @@ const defaultSettings = {
 let mainWindow;
 let runtime;
 let settings = { ...defaultSettings };
+let ipcRegistered = false;
 const processes = new Map();
 
 function runtimeDirectories() {
@@ -49,6 +54,10 @@ function cleanSettings(value) {
   const text = (field) => typeof value?.[field] === "string" ? value[field].trim() : defaultSettings[field];
   const timeout = Number(value?.providerTimeoutSeconds);
   return {
+    locale: value?.locale === "en" ? "en" : "zh",
+    theme: value?.theme === "light" ? "light" : "dark",
+    activeAiMode: value?.activeAiMode === "llm" ? "llm" : "yolo",
+    cesiumIonToken: text("cesiumIonToken"),
     llmApiUrl: text("llmApiUrl"), llmModel: text("llmModel"), llmApiKey: text("llmApiKey"),
     yoloApiUrl: text("yoloApiUrl"), yoloModel: text("yoloModel") || "default", yoloApiKey: text("yoloApiKey"),
     providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600 ? timeout : 30,
@@ -162,6 +171,7 @@ function startWeb() {
     PORT: String(runtime.ports.web),
     HOSTNAME: "127.0.0.1",
     NEXT_PUBLIC_API_URL: runtime.apiBase,
+    NEXT_PUBLIC_CESIUM_ION_ACCESS_TOKEN: settings.cesiumIonToken,
     ELECTRON_RUN_AS_NODE: "1",
   };
   if (app.isPackaged) {
@@ -170,6 +180,15 @@ function startWeb() {
   }
   const next = path.join(webDirectory, "node_modules", "next", "dist", "bin", "next");
   return spawnTracked("web", process.execPath, [next, "dev", "-p", String(runtime.ports.web)], environment, webDirectory);
+}
+
+async function restartWeb() {
+  await stopProcess("web");
+  startWeb();
+  await waitFor(`http://127.0.0.1:${runtime.ports.web}`, "Web 服务");
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
+  }
 }
 
 async function waitFor(url, name, timeout = 30000) {
@@ -222,22 +241,33 @@ async function startStack() {
 function diagnostics() {
   const locations = runtimeDirectories();
   return {
+    version: app.getVersion(),
     apiBase: runtime?.apiBase ?? null,
     ports: runtime?.ports ?? {},
     dataDirectory: locations.root,
     logDirectory: locations.logs,
-    services: ["gpu", "platform", "ground", "web"].map((name) => ({ name, running: processes.has(name) })),
+    services: ["gpu", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: processes.has(name) })),
   };
 }
 
 function registerIpc() {
+  // macOS may invoke bootstrap again after all windows are closed and the app
+  // is reactivated. IPC handlers belong to the process, not a window, so they
+  // must only be registered once.
+  if (ipcRegistered) return;
+  ipcRegistered = true;
   ipcMain.on("desktop:api-base", (event) => { event.returnValue = runtime?.apiBase ?? "http://127.0.0.1:8000/api"; });
   ipcMain.handle("desktop:settings:get", () => settings);
   ipcMain.handle("desktop:settings:save", async (_event, value) => {
+    const prior = settings;
     const saved = await saveSettings(value);
-    await stopProcess("gpu");
-    startService("gpu", runtime.ports.gpu);
-    await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
+    const providerChanged = ["llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
+    if (providerChanged) {
+      await stopProcess("gpu");
+      startService("gpu", runtime.ports.gpu);
+      await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
+    }
+    if (prior.cesiumIonToken !== saved.cesiumIonToken) await restartWeb();
     return saved;
   });
   ipcMain.handle("desktop:diagnostics", () => diagnostics());
@@ -259,9 +289,25 @@ async function bootstrap() {
     width: 1500, height: 980, minWidth: 1080, minHeight: 720,
     title: "星上智能计算数字孪生",
     webPreferences: {
-      preload: path.join(app.getAppPath(), "desktop", "preload.mjs"),
-      contextIsolation: true, nodeIntegration: false, sandbox: true,
+      // In `electron desktop/main.mjs` development app.getAppPath() resolves
+      // to web/desktop; packaged builds resolve to the application root.
+      preload: app.isPackaged
+        ? path.join(app.getAppPath(), "desktop", "preload.cjs")
+        : path.join(webDirectory, "desktop", "preload.cjs"),
+      // The renderer remains isolated from Node.  We deliberately keep the
+      // Chromium sandbox disabled here because the desktop bridge is an
+      // Electron preload IPC boundary and must load identically in development
+      // and packaged modes on macOS.
+      contextIsolation: true, nodeIntegration: false, sandbox: false,
     },
+  });
+  mainWindow.webContents.on("console-message", (_event, _level, message) => {
+    appendLog("desktop", `[renderer] ${message}\n`);
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    void mainWindow.webContents.executeJavaScript(
+      "typeof window.satSimDesktop",
+    ).then((result) => appendLog("desktop", `[bridge] satSimDesktop=${result}\n`));
   });
   await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>正在启动星上智能计算数字孪生…</body>");
   try {

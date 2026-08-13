@@ -1,4 +1,4 @@
-import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
+import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioConfig, ScenarioRecord, TransferRecord } from "./types";
 import { desktopBridge } from "./desktop";
 
 export const API_BASE = (desktopBridge()?.apiBase ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
@@ -9,15 +9,28 @@ async function request<T>(path:string, init?:RequestInit):Promise<T> {
   return response.status===204 ? undefined as T : response.json() as Promise<T>;
 }
 
+async function upload<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`${API_BASE}${path}`, { method: "POST", body: form, cache: "no-store" });
+  if (!response.ok) {
+    const body = await response.text();
+    try { throw new Error(JSON.stringify(JSON.parse(body).detail)); } catch (error) { if (error instanceof Error) throw error; throw new Error(body); }
+  }
+  return response.json() as Promise<T>;
+}
+
 export const api = {
   config:()=>request<PublicConfig>("/config"),
   scenarios:()=>request<ScenarioRecord[]>("/scenarios"),
   orbit:(scenarioId:string)=>request<OrbitTrack>(`/scenarios/${scenarioId}/orbit`),
   createScenario:()=>request<ScenarioRecord>("/scenarios",{method:"POST",body:JSON.stringify({name:"北京光学任务演示",clock_rate:10})}),
+  importScenarioYaml:(file:File)=>upload<{config:ScenarioConfig;clock:ScenarioRecord["clock"];validation:{status:string;scene_ready:boolean;required_scene_id:string}}>("/scenarios/import/yaml",file),
+  importScene:(file:File,sceneId:string,scenarioId?:string)=>upload<{id:string;sha256:string;metadata:Record<string,unknown>;scene_ready:boolean}>(`/scenes/import?scene_id=${encodeURIComponent(sceneId)}${scenarioId?`&scenario_id=${encodeURIComponent(scenarioId)}`:""}`,file),
   control:(id:string,action:string,rate?:number)=>request<{clock:ScenarioRecord["clock"]}>(`/scenarios/${id}/control`,{method:"POST",body:JSON.stringify({action,rate})}),
   missions:()=>request<MissionSummary[]>("/missions"),
   mission:(id:string)=>request<MissionDetail>(`/missions/${id}`),
-  createMission:(scenarioId:string,aiMode:AIMode,projectContext:string,analysisPrompt:string)=>request<MissionDetail>("/missions",{method:"POST",body:JSON.stringify({scenario_id:scenarioId,name:"自动规划光学观测",scene_id:"demo-optical-scene",ai_mode:aiMode,project_context:projectContext,analysis_prompt:analysisPrompt})}),
+  createMission:(scenarioId:string,aiMode:AIMode,projectContext:string,analysisPrompt:string)=>request<MissionDetail>("/missions",{method:"POST",body:JSON.stringify({scenario_id:scenarioId,name:"自动规划光学观测",ai_mode:aiMode,project_context:projectContext,analysis_prompt:analysisPrompt})}),
   advanceMission:(missionId:string,playbackSpeed:1|2|5,idempotencyKey:string)=>request<{mission_id:string;action:string}>(`/missions/${missionId}/advance`,{method:"POST",body:JSON.stringify({playback_speed:playbackSpeed,idempotency_key:idempotencyKey})}),
   cancelMission:(missionId:string)=>request<MissionDetail>(`/missions/${missionId}/cancel`,{method:"POST"}),
   missionResult:(missionId:string)=>request<MissionResultResponse>(`/missions/${missionId}/result`),

@@ -80,6 +80,24 @@
               "maxLength": 120,
               "title": "Scene Id"
             }
+          },
+          {
+            "name": "scenario_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scenario Id"
+            }
           }
         ],
         "requestBody": {
@@ -101,6 +119,46 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Import Scene Api Scenes Import Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scenarios/import/yaml": {
+      "post": {
+        "summary": "Import Scenario Yaml",
+        "operationId": "import_scenario_yaml_api_scenarios_import_yaml_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_scenario_yaml_api_scenarios_import_yaml_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Import Scenario Yaml Api Scenarios Import Yaml Post"
                 }
               }
             }
@@ -1071,6 +1129,20 @@
         ],
         "title": "AIMode"
       },
+      "Body_import_scenario_yaml_api_scenarios_import_yaml_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_scenario_yaml_api_scenarios_import_yaml_post"
+      },
       "Body_import_scene_api_scenes_import_post": {
         "properties": {
           "file": {
@@ -1220,6 +1292,56 @@
         ],
         "title": "LinkKind"
       },
+      "LinkProfile": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/LinkKind"
+          },
+          "bandwidth_bps": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Bandwidth Bps"
+          },
+          "latency_ms": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Latency Ms"
+          },
+          "jitter_ms": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Jitter Ms",
+            "default": 0
+          },
+          "frame_payload_bytes": {
+            "type": "integer",
+            "maximum": 1048576.0,
+            "minimum": 256.0,
+            "title": "Frame Payload Bytes",
+            "default": 65536
+          },
+          "queue_capacity_bytes": {
+            "type": "integer",
+            "minimum": 1024.0,
+            "title": "Queue Capacity Bytes",
+            "default": 268435456
+          },
+          "max_retries": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Max Retries",
+            "default": 5
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "bandwidth_bps",
+          "latency_ms"
+        ],
+        "title": "LinkProfile"
+      },
       "MissionAdvance": {
         "properties": {
           "idempotency_key": {
@@ -1317,6 +1439,16 @@
             "maxLength": 2000,
             "title": "Analysis Prompt",
             "default": "识别图像中的主要地物、目标和异常，说明判断依据与不确定性。"
+          },
+          "scenario_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScenarioConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "planned_windows": {
             "anyOf": [
@@ -1913,6 +2045,7 @@
           "l0",
           "l1a",
           "l1b",
+          "aux_context",
           "thumbnail",
           "stac",
           "ai_result",
@@ -2319,16 +2452,22 @@
           },
           "ground_station_latitude": {
             "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
             "title": "Ground Station Latitude",
             "default": 39.9042
           },
           "ground_station_longitude": {
             "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
             "title": "Ground Station Longitude",
             "default": 116.4074
           },
           "ground_station_altitude_m": {
             "type": "number",
+            "maximum": 100000.0,
+            "minimum": -1000.0,
             "title": "Ground Station Altitude M",
             "default": 50.0
           },
@@ -2341,6 +2480,24 @@
             "type": "string",
             "title": "Scene Id",
             "default": "demo-optical-scene"
+          },
+          "scene_ready": {
+            "type": "boolean",
+            "title": "Scene Ready",
+            "default": true
+          },
+          "links": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LinkProfile"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/LinkKind"
+            },
+            "type": "object",
+            "title": "Links"
+          },
+          "sensor": {
+            "$ref": "#/components/schemas/SensorSettings"
           }
         },
         "type": "object",
@@ -2380,6 +2537,77 @@
           "action"
         ],
         "title": "ScenarioControl"
+      },
+      "SensorSettings": {
+        "properties": {
+          "bit_depth": {
+            "type": "integer",
+            "maximum": 16.0,
+            "minimum": 8.0,
+            "title": "Bit Depth",
+            "default": 12
+          },
+          "gain": {
+            "type": "number",
+            "maximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Gain",
+            "default": 1.0
+          },
+          "offset_dn": {
+            "type": "number",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "title": "Offset Dn",
+            "default": 32.0
+          },
+          "dark_current_dn": {
+            "type": "number",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "title": "Dark Current Dn",
+            "default": 4.0
+          },
+          "read_noise_dn": {
+            "type": "number",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "title": "Read Noise Dn",
+            "default": 0.0
+          },
+          "prnu_sigma": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Prnu Sigma",
+            "default": 0.0
+          },
+          "bad_pixel_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Bad Pixel Rate",
+            "default": 0.0
+          },
+          "stripe_amplitude_dn": {
+            "type": "number",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "title": "Stripe Amplitude Dn",
+            "default": 0.0
+          },
+          "line_period_ms": {
+            "type": "number",
+            "maximum": 1000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Line Period Ms",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SensorSettings",
+        "description": "Validated optical-sensor parameters frozen with a scenario."
       },
       "TelemetryEvent": {
         "properties": {

@@ -1,4 +1,8 @@
 export type DesktopSettings = {
+  locale: "zh" | "en";
+  theme: "dark" | "light";
+  activeAiMode: "yolo" | "llm";
+  cesiumIonToken: string;
   llmApiUrl: string;
   llmModel: string;
   llmApiKey: string;
@@ -9,11 +13,12 @@ export type DesktopSettings = {
 };
 
 export type DesktopDiagnostics = {
+  version: string;
   apiBase: string | null;
   ports: Record<string, number>;
   dataDirectory: string;
   logDirectory: string;
-  services: Array<{ name: string; running: boolean }>;
+  services: Array<{ name: string; version: string; running: boolean }>;
 };
 
 export type DesktopBridge = {

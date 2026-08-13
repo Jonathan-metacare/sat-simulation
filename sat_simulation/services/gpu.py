@@ -21,6 +21,7 @@ from sat_simulation.common.link import TCPReceiver, TCPTransport
 from sat_simulation.common.models import (
     AIMode,
     LinkKind,
+    LinkProfile,
     NodeArtifact,
     NodeKind,
     NodeSnapshot,
@@ -28,7 +29,6 @@ from sat_simulation.common.models import (
     ProductLevel,
     ProtocolFrameTrace,
     ProtocolTransaction,
-    default_link_profiles,
 )
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import (
@@ -140,7 +140,10 @@ class GPUState:
                 scene_source = self.scene_dir / f"{context['scene']['scene_id']}.tif"
             if not scene_source.exists():
                 raise ValueError(f"GPU cannot access read-only scene {context['scene']['scene_id']}")
-            pipeline = OpticalPipeline(SensorConfig(seed=int(context.get("sensor_seed") or 20260811)))
+            sensor = dict(context.get("sensor") or {})
+            pipeline = OpticalPipeline(
+                SensorConfig(seed=int(context.get("sensor_seed") or 20260811), **sensor)
+            )
             products = await asyncio.to_thread(
                 pipeline.process_l1_from_l0,
                 l0_path=l0_path,
@@ -162,13 +165,14 @@ class GPUState:
                 "thumbnail_path": str(products.paths[ProductLevel.THUMBNAIL]),
                 "received_sha256": l0_digest,
                 "l1b_sha256": l1b_manifest.sha256,
+                "gtx_profile": context.get("gtx_profile"),
                 "status": "l1_ready",
             }
             clock = SimulationClock(
                 datetime.fromtimestamp(frame.simulated_time_ns / 1_000_000_000, tz=UTC), rate=1
             )
             transport = TCPTransport(
-                profile=default_link_profiles()[LinkKind.GTX], clock=clock,
+                profile=LinkProfile.model_validate(context.get("gtx_profile") or {"kind": "gtx", "bandwidth_bps": 2.5e9, "latency_ms": 0.2}), clock=clock,
                 trace_sink=self.report_trace, source_node=NodeKind.GPU,
                 target_node=NodeKind.PLATFORM,
             )
@@ -259,7 +263,7 @@ class GPUState:
             datetime.fromtimestamp(frame.simulated_time_ns / 1_000_000_000, tz=UTC), rate=1
         )
         transport = TCPTransport(
-            profile=default_link_profiles()[LinkKind.GTX], clock=clock,
+            profile=LinkProfile.model_validate(job.get("gtx_profile") or {"kind": "gtx", "bandwidth_bps": 2.5e9, "latency_ms": 0.2}), clock=clock,
             trace_sink=self.report_trace, source_node=NodeKind.GPU,
             target_node=NodeKind.PLATFORM,
         )

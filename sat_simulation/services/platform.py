@@ -36,7 +36,6 @@ from sat_simulation.common.models import (
     ScenarioConfig,
     TransferRecord,
     TransferStatus,
-    default_link_profiles,
     utc_now,
 )
 from sat_simulation.common.orbit import target_attitude
@@ -297,7 +296,9 @@ class PlatformState:
         scenario = ScenarioConfig.model_validate(state["scenario"])
         mission_dir = self.product_dir / mission_id
         mission_dir.mkdir(parents=True, exist_ok=True)
-        pipeline = OpticalPipeline(SensorConfig(seed=scenario.seed))
+        pipeline = OpticalPipeline(
+            SensorConfig(seed=scenario.seed, **scenario.sensor.model_dump())
+        )
         events: list[dict[str, Any]] = []
 
         if stage == "capture":
@@ -376,6 +377,8 @@ class PlatformState:
                 "captured_at": state["captured_at"],
                 "spacecraft": state["spacecraft"],
                 "sensor_seed": scenario.seed,
+                "sensor": scenario.sensor.model_dump(mode="json"),
+                "gtx_profile": scenario.link_profile(LinkKind.GTX).model_dump(mode="json"),
                 "l0": l0_manifest.model_dump(mode="json"),
             }
             state["phase"] = MissionPhase.PROCESSING_COMPLETE
@@ -426,7 +429,7 @@ class PlatformState:
             )
             clock = self.clock_for(simulated_at)
             transport = TCPTransport(
-                profile=default_link_profiles()[LinkKind.GTX],
+                profile=scenario.link_profile(LinkKind.GTX),
                 clock=clock,
                 fault=self.fault_for(state, LinkKind.GTX),
                 seed=scenario.seed,
@@ -486,7 +489,7 @@ class PlatformState:
                 return {"events": events, "phase": state["phase"]}
             clock = self.clock_for(simulated_at)
             transport = TCPTransport(
-                profile=default_link_profiles()[LinkKind.GTX], clock=clock,
+                profile=scenario.link_profile(LinkKind.GTX), clock=clock,
                 trace_sink=self.report_trace, source_node=NodeKind.PLATFORM,
                 target_node=NodeKind.GPU,
             )
@@ -624,7 +627,7 @@ class PlatformState:
             else utc_now()
         )
         transport = TCPTransport(
-            profile=default_link_profiles()[LinkKind.DOWNLINK],
+            profile=scenario.link_profile(LinkKind.DOWNLINK),
             clock=clock,
             fault=self.fault_for(state, LinkKind.DOWNLINK),
             seed=scenario.seed,
@@ -654,7 +657,8 @@ class PlatformState:
         ]
         if node == NodeKind.OPTICAL:
             products = [item for item in products if item.level == ProductLevel.RAW]
-            sensor = SensorConfig(seed=int(state["scenario"]["seed"]))
+            scenario = ScenarioConfig.model_validate(state["scenario"])
+            sensor = SensorConfig(seed=scenario.seed, **scenario.sensor.model_dump())
             public_state = {
                 "phase": state.get("phase"), "captured_at": state.get("captured_at"),
                 "sensor": sensor.__dict__, "scene_id": state["command"].get("scene_id"),

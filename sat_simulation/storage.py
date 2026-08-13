@@ -233,6 +233,15 @@ class Repository:
                 row.clock_json = clock.model_dump_json()
                 row.updated_at = now_utc()
 
+    async def update_scenario_config(self, config: ScenarioConfig) -> None:
+        async with self.session() as session:
+            row = await session.get(ScenarioRow, config.id)
+            if not row:
+                raise KeyError(config.id)
+            row.name = config.name
+            row.config_json = config.model_dump_json()
+            row.updated_at = now_utc()
+
     async def get_scenario(
         self, scenario_id: str
     ) -> tuple[ScenarioConfig, SimulationClockState] | None:

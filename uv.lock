@@ -641,7 +641,7 @@ wheels = [
 
 [[package]]
 name = "sat-simulation"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -654,6 +654,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyproj" },
     { name = "python-multipart" },
+    { name = "pyyaml" },
     { name = "rasterio" },
     { name = "sgp4" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -682,6 +683,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "pyproj", specifier = ">=3.7,<4" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "rasterio", specifier = ">=1.4,<2" },
     { name = "sgp4", specifier = ">=2.24,<3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36,<3" },
