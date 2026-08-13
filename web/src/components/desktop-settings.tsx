@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, Settings2, X } from "lucide-react";
 
-import { desktopBridge, type DesktopDiagnostics, type DesktopSettings } from "~/lib/desktop";
+import { desktopBridge, type DesktopSettings } from "~/lib/desktop";
 import { api } from "~/lib/api";
 import type { Locale } from "~/lib/store";
 
@@ -38,11 +38,10 @@ function sectionTitle(section: SettingsSection, zh: boolean) {
   })[section];
 }
 
-export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme, onAiMode, initialSection = "general", onScenarioImported }: { open: boolean; onClose(): void; locale: Locale; onLocale(value: Locale): void; onTheme(value: "dark" | "light"): void; onAiMode(value: "yolo" | "llm"): void; initialSection?: SettingsSection; onScenarioImported?(): void }) {
+export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme, onAiMode, initialSection = "general", onScenarioImported, onSettingsSaved }: { open: boolean; onClose(): void; locale: Locale; onLocale(value: Locale): void; onTheme(value: "dark" | "light"): void; onAiMode(value: "yolo" | "llm"): void; initialSection?: SettingsSection; onScenarioImported?(): void; onSettingsSaved?(): void }) {
   const bridge = desktopBridge();
   const zh = locale === "zh";
   const [value, setValue] = useState<DesktopSettings>(emptySettings);
-  const [diagnostics, setDiagnostics] = useState<DesktopDiagnostics>();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -54,8 +53,8 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
 
   useEffect(() => {
     if (!open || !bridge) return;
-    void Promise.all([bridge.getSettings(), bridge.diagnostics()]).then(([saved, details]) => {
-      setValue(saved); setDiagnostics(details); setError(undefined);
+    void bridge.getSettings().then((saved) => {
+      setValue(saved); setError(undefined);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, [bridge, open]);
   useEffect(() => { if (open) setSection(initialSection); }, [initialSection, open]);
@@ -68,6 +67,7 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
     try {
       const saved = await bridge.saveSettings(value);
       setValue(saved); onLocale(saved.locale); onTheme(saved.theme); onAiMode(saved.activeAiMode);
+      onSettingsSaved?.();
       onClose();
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }

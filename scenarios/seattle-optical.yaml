@@ -1,0 +1,34 @@
+schema_version: 1
+name: Seattle Optical Observation Demo
+seed: 20260813
+clock_rate: 10
+satellite:
+  name: SIM-OPTICAL-SEA-01
+  tle_line1: "1 55244U 23006C   26126.66766851  .00004587  00000-0  24048-3 0  9998"
+  tle_line2: "2 55244  43.1978 352.6432 0015896 112.1710 248.0829 15.16807012183579"
+ground_station:
+  id: GS-DEMO-SEATTLE
+  simulated: true
+  latitude: 47.6062
+  longitude: -122.3321
+  altitude_m: 56
+links:
+  gtx:
+    bandwidth_bps: 2500000000
+    latency_ms: 0.2
+  uplink:
+    bandwidth_bps: 2000000
+    latency_ms: 20
+  downlink:
+    bandwidth_bps: 150000000
+    latency_ms: 20
+sensor:
+  bit_depth: 12
+  gain: 1.0
+  offset_dn: 32
+  dark_current_dn: 4
+  read_noise_dn: 0
+  prnu_sigma: 0
+  bad_pixel_rate: 0
+  stripe_amplitude_dn: 0
+  line_period_ms: 0.5

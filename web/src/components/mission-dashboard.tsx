@@ -303,7 +303,7 @@ export function MissionDashboard() {
 
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
-      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} onAiMode={setAiMode} initialSection={settingsSection} onScenarioImported={() => void reload()} />
+      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} onAiMode={setAiMode} initialSection={settingsSection} onScenarioImported={() => void reload()} onSettingsSaved={() => void reload()} />
       <aside aria-label="任务控制面板" className={`mission-drawer fixed inset-y-0 right-0 z-50 flex w-full max-w-none flex-col border-l border-cyan-300/20 shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex items-center justify-between border-b border-cyan-200/10 px-5 py-4">
           <div><div className="text-sm font-medium text-cyan-100">{t("panel.title")}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{t("panel.subtitle")}</div></div>
@@ -433,7 +433,7 @@ export function MissionDashboard() {
             <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>{t("actions.cancel")}</Button><Button onClick={createMission} active disabled={working}>{working ? t("actions.initRunning") : mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("actions.endAndCreate") : t("actions.initMission")}</Button></div>
           </div>
         </div>}
-      </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} gtxLink={config?.links.gtx} locale={locale} />}
+      </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} activeAiMode={aiMode} gtxLink={config?.links.gtx} locale={locale} />}
     </main>
   );
 }

@@ -9,7 +9,7 @@ import { Cpu, Database, Download, FileImage, Radio, Satellite, ScanLine, ShieldC
 import { api, nodeArtifactURL } from "~/lib/api";
 import { translate } from "~/lib/i18n";
 import type { Locale } from "~/lib/store";
-import type { MissionDetail, NodeArtifact, NodeKind, NodeSnapshot } from "~/lib/types";
+import type { AIMode, MissionDetail, NodeArtifact, NodeKind, NodeSnapshot } from "~/lib/types";
 
 const titles: Record<Exclude<NodeKind, "ground">, { title: Parameters<typeof translate>[1]; subtitle: Parameters<typeof translate>[1] }> = {
   platform: { title: "node.platform.title", subtitle: "node.platform.subtitle" },
@@ -17,9 +17,10 @@ const titles: Record<Exclude<NodeKind, "ground">, { title: Parameters<typeof tra
   gpu: { title: "node.gpu.title", subtitle: "node.gpu.subtitle" },
 };
 
-export function NodeTab({ node, mission, providerHealth, gtxLink, locale = "zh" }: {
+export function NodeTab({ node, mission, providerHealth, activeAiMode, gtxLink, locale = "zh" }: {
   node: Exclude<NodeKind, "ground">; mission?: MissionDetail;
   providerHealth: Record<string, { status: string }>;
+  activeAiMode: AIMode;
   gtxLink?: { bandwidth_bps: number; latency_ms: number; frame_payload_bytes: number };
   locale?: Locale;
 }) {
@@ -40,7 +41,7 @@ export function NodeTab({ node, mission, providerHealth, gtxLink, locale = "zh" 
     item.level === "thumbnail" || item.level === "raw_quicklook"
   );
   const aiResult = snapshot?.state.result as { result?: { content?: string; provider?: string; model_version?: string } } | undefined;
-  const providerStatus = mission?.ai_mode === "llm"
+  const providerStatus = activeAiMode === "llm"
     ? providerHealth.language?.status
     : providerHealth.detection?.status;
   const observationNotice = snapshot?.observation_notice?.startsWith("仿真观察数据")
@@ -74,7 +75,8 @@ export function NodeTab({ node, mission, providerHealth, gtxLink, locale = "zh" 
         <h3 className="flex items-center gap-2 text-sm text-cyan-100"><Cpu size={15} />{t("node.provider")}</h3>
         <span className="rounded border border-orange-300/20 bg-orange-300/10 px-2 py-1 text-[10px] text-orange-200">{providerStatus ?? "UNKNOWN"}</span>
       </div>
-      <p className="text-xs leading-5 text-slate-500">{t("node.providerNote", { mode: mission?.ai_mode?.toUpperCase() ?? "YOLO" })}</p>
+      <p className="text-xs leading-5 text-slate-500">{t("node.providerNote", { mode: activeAiMode.toUpperCase() })}</p>
+      {mission && mission.ai_mode !== activeAiMode && <p className="mt-2 text-[10px] leading-4 text-orange-300">{locale === "zh" ? `当前任务固定使用 ${mission.ai_mode.toUpperCase()}；设置中的 ${activeAiMode.toUpperCase()} 将用于后续新任务。` : `The current mission remains ${mission.ai_mode.toUpperCase()}; ${activeAiMode.toUpperCase()} applies to subsequent missions.`}</p>}
     </section>}
 
     <section className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
