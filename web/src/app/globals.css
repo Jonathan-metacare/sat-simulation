@@ -41,7 +41,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .panel { border: 1px solid var(--line); background: var(--panel-bg); box-shadow: var(--panel-shadow); backdrop-filter: blur(16px); }
 .grid-scan { background-image: linear-gradient(var(--scan-a) 1px,transparent 1px),linear-gradient(90deg,var(--scan-b) 1px,transparent 1px); background-size: 28px 28px; }
 .mission-content { width:100%; min-width:0; transition:width .3s ease,margin-right .3s ease; }
-.mission-drawer { width:min(100vw,44rem); }
+.mission-drawer { width:min(100vw,44rem); background:rgba(4,21,33,.98); }
 @media (min-width:1024px) {
   .mission-drawer { width:var(--mission-drawer-width); }
   .mission-content--drawer-open { width:calc(100% - var(--mission-drawer-width)); margin-right:var(--mission-drawer-width); }
@@ -86,6 +86,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 :root[data-theme="light"] .text-slate-600 { color:#587989 !important; }
 :root[data-theme="light"] .text-cyan-200,
 :root[data-theme="light"] .text-cyan-300 { color:#08718b !important; }
+:root[data-theme="light"] .text-emerald-200,
 :root[data-theme="light"] .text-emerald-300 { color:#08764d !important; }
 :root[data-theme="light"] .text-orange-200,
 :root[data-theme="light"] .text-orange-300 { color:#a64e09 !important; }
@@ -108,3 +109,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 :root[data-theme="light"] .llm-markdown strong { color:#0b3446; }
 :root[data-theme="light"] .llm-markdown code,
 :root[data-theme="light"] .llm-markdown pre { background:rgba(216,238,246,.84); color:#0b657d; border-color:rgba(7,102,132,.18); }
+:root[data-theme="light"] .mission-drawer { background:rgba(234,247,252,.98); border-color:rgba(7,102,132,.24); box-shadow:-14px 0 34px rgba(10,74,96,.14); }
+:root[data-theme="light"] .mission-drawer .text-emerald-200\/80 { color:#08764d !important; opacity:1 !important; }
+:root[data-theme="light"] .mission-drawer .text-cyan-100 { color:#07536b !important; }
+:root[data-theme="light"] .text-cyan-300\/60 { color:#08718b !important; opacity:1 !important; }

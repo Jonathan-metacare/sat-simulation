@@ -34,6 +34,31 @@ function formatBytes(bytes = 0) {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
+function localizedMissionAction(
+  t: (key: Parameters<typeof translate>[1], values?: Parameters<typeof translate>[2]) => string,
+  action?: string | null,
+) {
+  return action?.startsWith("mission.action.")
+    ? t(action as Parameters<typeof translate>[1])
+    : action;
+}
+
+function localizedEventMessage(
+  t: (key: Parameters<typeof translate>[1], values?: Parameters<typeof translate>[2]) => string,
+  event: { message: string; data: Record<string, unknown> },
+) {
+  const key = event.data.message_key;
+  if (key === "mission.event.phaseStarted") {
+    return t("mission.event.phaseStarted", {
+      action: localizedMissionAction(t, typeof event.data.action_key === "string" ? event.data.action_key : undefined),
+    });
+  }
+  if (typeof key === "string" && key.startsWith("mission.")) {
+    return t(key as Parameters<typeof translate>[1]);
+  }
+  return event.message;
+}
+
 function Button({ children, onClick, active, disabled, danger }: {
   children: React.ReactNode; onClick?: () => void; active?: boolean;
   disabled?: boolean; danger?: boolean;
@@ -195,6 +220,10 @@ export function MissionDashboard() {
     );
     setMission(await api.mission(mission.command.id));
   });
+  const missionCompleted = mission?.execution_state === "completed" || mission?.phase === "completed";
+  const advanceLabel = missionCompleted
+    ? t("controls.missionCompleted")
+    : localizedMissionAction(t, mission?.next_action) ?? t("controls.createFirst");
   const navigateTab = (tab: NodeKind) => {
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
@@ -204,7 +233,6 @@ export function MissionDashboard() {
 
   const stageIndex = Math.max(0, stages.findIndex(([key]) => key === mission?.phase));
   const products = mission?.products ?? [];
-  const onboardProducts = mission?.onboard_products ?? [];
   const thumbnail = products.find((item) => item.level === "thumbnail");
   const l1b = products.find((item) => item.level === "l1b");
   const analysis = missionResult?.ai_result?.result;
@@ -254,7 +282,7 @@ export function MissionDashboard() {
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
       <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} />
-      <aside aria-label="任务控制面板" className={`mission-drawer fixed inset-y-0 right-0 z-50 flex w-full max-w-none flex-col border-l border-cyan-300/20 bg-[#041521]/[.98] shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
+      <aside aria-label="任务控制面板" className={`mission-drawer fixed inset-y-0 right-0 z-50 flex w-full max-w-none flex-col border-l border-cyan-300/20 shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex items-center justify-between border-b border-cyan-200/10 px-5 py-4">
           <div><div className="text-sm font-medium text-cyan-100">{t("panel.title")}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{t("panel.subtitle")}</div></div>
         </div>
@@ -278,10 +306,10 @@ export function MissionDashboard() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {([1, 2, 5] as const).map((rate) => <Button key={rate} onClick={() => setPlaybackSpeed(rate)} active={playbackSpeed === rate}>{rate}x</Button>)}
-                <Button onClick={() => setCreateOpen(true)} disabled={working || !scenario || mission?.execution_state === "running"}><Zap size={14} />{t("actions.newMission")}</Button>
+                <Button onClick={() => setCreateOpen(true)} disabled={!scenario || mission?.execution_state === "running"}><Zap size={14} />{t("actions.newMission")}</Button>
                 <Button onClick={advanceMission} active disabled={!mission?.can_advance || mission?.execution_state === "running" || working}>
                   {mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}
-                  {mission?.execution_state === "running" ? t("controls.stageRunning") : (mission?.next_action ?? t("controls.createFirst"))}
+                  {mission?.execution_state === "running" ? t("controls.stageRunning") : advanceLabel}
                 </Button>
               </div>
             </div>
@@ -295,7 +323,7 @@ export function MissionDashboard() {
             {mission?.execution_state === "blocked" && <p className="mt-3 text-xs leading-5 text-orange-200">{mission.block_reason}</p>}
             {mission?.execution_state === "retryable_error" && <p className="mt-3 text-xs leading-5 text-red-300">可重试：{mission.error}</p>}
             <div ref={eventListRef} className="mt-4 max-h-56 space-y-2 overflow-auto border-t border-white/[.05] pt-4">
-              {visibleEvents.length ? [...visibleEvents].reverse().map((event) => <div key={event.id} className={`grid grid-cols-[72px_1fr] gap-3 rounded-lg px-2 py-1.5 text-xs ${["macro_phase_blocked", "macro_phase_failed"].includes(event.event_type) ? "bg-orange-400/[.06]" : ""}`}><span className="font-mono text-slate-600">{new Date(event.simulated_at).toLocaleTimeString("zh-CN", { hour12: false })}</span><div><div className="text-slate-300">{event.message}</div><div className="mt-0.5 text-[10px] text-slate-600">{event.source} · {event.channel} · {event.event_type}</div></div></div>) : <Empty text={t("mission.events.empty")} />}
+              {visibleEvents.length ? [...visibleEvents].reverse().map((event) => <div key={event.id} className={`grid grid-cols-[72px_1fr] gap-3 rounded-lg px-2 py-1.5 text-xs ${["macro_phase_blocked", "macro_phase_failed"].includes(event.event_type) ? "bg-orange-400/[.06]" : ""}`}><span className="font-mono text-slate-600">{new Date(event.simulated_at).toLocaleTimeString("zh-CN", { hour12: false })}</span><div><div className="text-slate-300">{localizedEventMessage(t, event)}</div><div className="mt-0.5 text-[10px] text-slate-600">{event.source} · {event.channel} · {event.event_type}</div></div></div>) : <Empty text={t("mission.events.empty")} />}
             </div>
           </section>
           <ProtocolInspector missionId={mission?.command.id} runId={mission?.command.run_id} locale={locale} />
@@ -358,7 +386,7 @@ export function MissionDashboard() {
         <section className="space-y-4">
           <div className="panel rounded-2xl p-4">
             <div className="mb-4 flex items-center justify-between"><Title icon={<Database size={16} />} text={t("ground.products")} /><span className="text-[10px] text-slate-500">{t("ground.productChainNote")}</span></div>
-            {products.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{products.map((product) => <ProductCard key={product.id} product={product} />)}</div> : onboardProducts.length ? <div><div className="mb-3 text-[10px] tracking-wider text-orange-200">{t("ground.onboardCatalog")}</div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{onboardProducts.map((product) => <OnboardProductCard key={product.id} product={product} locale={locale} />)}</div></div> : <Empty text={t("ground.productsEmpty")} />}
+            {products.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{products.map((product) => <ProductCard key={product.id} product={product} />)}</div> : <Empty text={t("ground.productsEmpty")} />}
           </div>
           <div className="panel overflow-hidden rounded-2xl">
             <PanelHeader icon={<FileImage size={16} />} title={t("ground.analysis")} note={t("ground.downlinked")} />
@@ -398,4 +426,3 @@ function Empty({ text }: { text: string }) { return <div className="py-8 text-ce
 function Stage({ label, complete, active, last }: { label: string; complete: boolean; active: boolean; last: boolean }) { return <div className="relative flex flex-1 flex-col items-center text-center"><div className={`relative z-10 size-3 rounded-full border ${active ? "border-cyan-100 bg-cyan-300 shadow-[0_0_14px_#51e5ff]" : complete ? "border-emerald-300 bg-emerald-400" : "border-slate-600 bg-slate-900"}`} />{!last && <div className={`absolute left-1/2 top-[5px] h-px w-full ${complete ? "bg-emerald-400/60" : "bg-slate-700"}`} />}<span className={`mt-3 text-[10px] ${active ? "text-cyan-100" : complete ? "text-emerald-200/80" : "text-slate-600"}`}>{label}</span></div>; }
 function LinkCard({ title, rate = 0, latency = 0, accent, locale }: { title: string; rate?: number; latency?: number; accent: "cyan" | "orange"; locale: Parameters<typeof translate>[0] }) { return <div className="rounded-xl border border-white/[.055] bg-black/15 p-3"><div className="mb-2 flex items-center justify-between text-xs"><span className="text-slate-300">{title}</span><span className={accent === "orange" ? "text-orange-300" : "text-cyan-300"}>{translate(locale, "link.ready")}</span></div><div className="grid grid-cols-2 gap-2"><Metric label={translate(locale, "link.bandwidth")} value={rate >= 1e9 ? `${(rate / 1e9).toFixed(1)} Gbps` : `${(rate / 1e6).toFixed(0)} Mbps`} /><Metric label={translate(locale, "link.latency")} value={`${latency} ms`} /></div></div>; }
 function ProductCard({ product }: { product: ProductManifest }) { return <a href={artifactURL(product.id)} target="_blank" rel="noreferrer" className="rounded-xl border border-white/[.06] bg-black/15 p-3 transition hover:border-cyan-300/25"><div className="mb-2 flex items-center justify-between"><span className="rounded bg-cyan-300/10 px-2 py-1 text-[10px] font-semibold text-cyan-200">{product.level.toUpperCase()}</span><span className="text-[10px] text-slate-600">{formatBytes(product.size_bytes)}</span></div><div className="truncate text-xs text-slate-300">{product.name}</div><div className="mt-2 truncate font-mono text-[9px] text-slate-600">SHA {product.sha256.slice(0, 16)}…</div></a>; }
-function OnboardProductCard({ product, locale }: { product: ProductManifest; locale: Parameters<typeof translate>[0] }) { return <div className="rounded-xl border border-orange-300/10 bg-black/15 p-3"><div className="mb-2 flex items-center justify-between"><span className="rounded bg-orange-300/10 px-2 py-1 text-[10px] font-semibold text-orange-200">{product.level.toUpperCase()}</span><span className="text-[10px] text-slate-600">{formatBytes(product.size_bytes)}</span></div><div className="truncate text-xs text-slate-400">{product.name}</div><div className="mt-2 text-[9px] text-orange-200/60">{translate(locale, "ground.onboardOnly")}</div></div>; }

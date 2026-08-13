@@ -59,39 +59,58 @@ PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
     MissionPhase.INITIALIZED: (
         MissionPhase.UPLINK_COMPLETE,
         "uplink",
-        "进入上注窗口",
+        "mission.action.enterUplinkWindow",
         MissionStatus.UPLINKING,
     ),
     MissionPhase.UPLINK_COMPLETE: (
         MissionPhase.CAPTURE_COMPLETE,
         "capture",
-        "进入拍摄窗口",
+        "mission.action.enterCaptureWindow",
         MissionStatus.CAPTURING,
     ),
     MissionPhase.CAPTURE_COMPLETE: (
         MissionPhase.PROCESSING_COMPLETE,
         "processing",
-        "执行产品处理",
+        "mission.action.processProducts",
         MissionStatus.L1A_PROCESSING,
     ),
     MissionPhase.PROCESSING_COMPLETE: (
         MissionPhase.GTX_COMPLETE,
         "gtx",
-        "执行 GTX 传输",
+        "mission.action.transferGtx",
         MissionStatus.GTX_TRANSFER,
     ),
     MissionPhase.GTX_COMPLETE: (
         MissionPhase.AI_COMPLETE,
         "ai",
-        "执行智能分析",
+        "mission.action.runAiAnalysis",
         MissionStatus.AI_PROCESSING,
     ),
     MissionPhase.AI_COMPLETE: (
         MissionPhase.COMPLETED,
         "downlink",
-        "获取星上结果",
+        "mission.action.requestOnboardResult",
         MissionStatus.DOWNLINKING,
     ),
+}
+
+# Telemetry stores a stable message key alongside its compatibility message.
+# Browser clients translate the key at render time, so event history also
+# changes language without rewriting the append-only event log.
+EVENT_MESSAGE_KEYS: dict[str, str] = {
+    "mission_initialized": "mission.event.initialized",
+    "macro_phase_started": "mission.event.phaseStarted",
+    "command_received": "mission.event.commandReceived",
+    "result_package_received": "mission.event.resultPackageReceived",
+    "macro_phase_completed": "mission.event.phaseCompleted",
+    "mission_cancelled": "mission.event.cancelled",
+    "attitude_maneuver_completed": "mission.event.attitudeManeuverCompleted",
+    "raw_stored": "mission.event.rawStored",
+    "l0_processing_completed": "mission.event.l0ProcessingCompleted",
+    "l1_products_reused": "mission.event.l1ProductsReused",
+    "gtx_transfer_completed": "mission.event.gtxTransferCompleted",
+    "ai_result_reused": "mission.event.aiResultReused",
+    "ai_result_stored": "mission.event.aiResultStored",
 }
 
 
@@ -250,7 +269,11 @@ class GroundState:
                     message=label,
                     simulated_at=clock.now(),
                     source="ground-orchestrator",
-                    data={"progress": index / ticks, "spacecraft": sample.model_dump(mode="json")},
+                    data={
+                        "progress": index / ticks,
+                        "spacecraft": sample.model_dump(mode="json"),
+                        "message_key": label,
+                    },
                     channel="simulation_control",
                 )
             )
@@ -278,7 +301,7 @@ class GroundState:
                     message=label,
                     simulated_at=clock.now(),
                     source="ground-orchestrator",
-                    data={"progress": index / ticks},
+                    data={"progress": index / ticks, "message_key": label},
                 )
             )
             if wall_delay:
@@ -361,6 +384,8 @@ class GroundState:
                         "from_phase": phase,
                         "target_phase": target_phase,
                         "active_substage": stage,
+                        "message_key": "mission.event.phaseStarted",
+                        "action_key": label,
                     },
                 )
             )
@@ -371,7 +396,7 @@ class GroundState:
                     clock=clock,
                     target=command.planned_windows.uplink.max_elevation_at,
                     playback_speed=playback_speed,
-                    label="卫星正在进入北京站上注窗口",
+                    label="mission.event.enteringUplinkWindow",
                     status=MissionStatus.UPLINKING,
                 )
                 faults = await self.repo.list_faults(command.scenario_id)
@@ -394,7 +419,10 @@ class GroundState:
                         message="任务指令经真实数传上注，星务已接收并校验。",
                         simulated_at=clock.now(),
                         source="platform-node",
-                        data={"record": record.model_dump(mode="json")},
+                        data={
+                            "record": record.model_dump(mode="json"),
+                            "message_key": EVENT_MESSAGE_KEYS["command_received"],
+                        },
                         channel="uplink",
                         provenance="measured",
                     )
@@ -406,7 +434,7 @@ class GroundState:
                     clock=clock,
                     target=command.planned_windows.capture.max_elevation_at,
                     playback_speed=playback_speed,
-                    label="卫星正在进入独立拍摄区域",
+                    label="mission.event.enteringCaptureArea",
                     status=MissionStatus.MANEUVERING,
                 )
                 await self.call_platform_stage(mission, stage, clock)
@@ -417,7 +445,7 @@ class GroundState:
                     clock=clock,
                     target=command.planned_windows.downlink.max_elevation_at,
                     playback_speed=playback_speed,
-                    label="卫星正在进入下一次北京站可见窗口",
+                    label="mission.event.enteringDownlinkWindow",
                     status=MissionStatus.DOWNLINKING,
                 )
                 body = pack_json({"mission_id": mission_id, "request": "result_package"})
@@ -441,7 +469,10 @@ class GroundState:
                         message="地面按 mission_id 请求，星务结果包已在下一过站窗口下传。",
                         simulated_at=clock.now(),
                         source="ground-station",
-                        data={"request_transfer": record.model_dump(mode="json")},
+                        data={
+                            "request_transfer": record.model_dump(mode="json"),
+                            "message_key": EVENT_MESSAGE_KEYS["result_package_received"],
+                        },
                         channel="downlink",
                         provenance="measured",
                     )
@@ -476,7 +507,11 @@ class GroundState:
                     message="阶段成功 · 仿真已暂停",
                     simulated_at=clock.now(),
                     source="ground-orchestrator",
-                    data={"phase": target_phase, "paused": True},
+                    data={
+                        "phase": target_phase,
+                        "paused": True,
+                        "message_key": "mission.event.phaseCompleted",
+                    },
                 )
             )
         except asyncio.CancelledError:
@@ -543,7 +578,11 @@ class GroundState:
                 message=value["message"],
                 simulated_at=clock.now(),
                 source="platform-node",
-                data=value.get("data", {}),
+                data={
+                    **value.get("data", {}),
+                    "message_key": value.get("data", {}).get("message_key")
+                    or EVENT_MESSAGE_KEYS.get(value["event_type"]),
+                },
                 provenance="derived",
                 channel="simulation_control" if stage in {"capture", "processing"} else "gtx",
             )
@@ -563,14 +602,11 @@ def enrich_mission(mission: dict[str, Any]) -> dict[str, Any]:
         and mission["execution_state"]
         not in {ExecutionState.RUNNING, ExecutionState.COMPLETED, ExecutionState.CANCELLED}
     )
-    onboard: dict[str, dict[str, Any]] = {}
-    for event in mission.get("events", []):
-        value = event.data.get("manifest")
-        if isinstance(value, dict) and value.get("level"):
-            public_value = dict(value)
-            public_value.pop("artifact_path", None)
-            onboard[str(public_value["level"])] = public_value
-    mission["onboard_products"] = list(onboard.values())
+    # The public mission detail is the Ground control-plane view. Product
+    # manifests learned from platform events must not be projected into it:
+    # RAW/L0 are only observable in the Optical/Platform debug tabs and are
+    # not ground-accessible until a RESULT_PACKAGE is actually downlinked.
+    mission["onboard_products"] = []
     return mission
 
 
@@ -746,7 +782,11 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 message="任务与真实轨道窗口已规划，仿真保持暂停。",
                 simulated_at=clock.now(),
                 source="ground-orchestrator",
-                data={"planned_windows": plan.model_dump(mode="json"), "ai_mode": request.ai_mode},
+                data={
+                    "planned_windows": plan.model_dump(mode="json"),
+                    "ai_mode": request.ai_mode,
+                    "message_key": EVENT_MESSAGE_KEYS["mission_initialized"],
+                },
             )
         )
         return MissionDetail.model_validate(
@@ -820,7 +860,10 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                     message="当前任务已由用户结束；历史事件与星上产品保留。",
                     simulated_at=clock.now(),
                     source="ground-orchestrator",
-                    data={"phase_when_cancelled": mission["phase"]},
+                data={
+                    "phase_when_cancelled": mission["phase"],
+                    "message_key": EVENT_MESSAGE_KEYS["mission_cancelled"],
+                },
                 )
             )
         return MissionDetail.model_validate(

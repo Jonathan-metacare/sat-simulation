@@ -1,5 +1,6 @@
 appId: ai.spacezenith.sat-simulation
 productName: 星上智能计算数字孪生
+afterPack: desktop/after-pack.cjs
 directories:
   output: release
   buildResources: desktop/build

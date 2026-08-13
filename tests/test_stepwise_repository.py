@@ -13,7 +13,7 @@ from sat_simulation.common.models import (
     ScenarioConfig,
 )
 from sat_simulation.common.orbit import plan_mission_windows
-from sat_simulation.services.ground import PHASE_FLOW
+from sat_simulation.services.ground import PHASE_FLOW, enrich_mission
 from sat_simulation.storage import Repository
 
 
@@ -130,3 +130,22 @@ def test_processing_macro_prepares_l1_context_status() -> None:
     assert target_phase == MissionPhase.PROCESSING_COMPLETE
     assert substage == "processing"
     assert status == MissionStatus.L1A_PROCESSING
+
+
+def test_ground_mission_detail_does_not_expose_onboard_manifest() -> None:
+    mission = {
+        "phase": MissionPhase.CAPTURE_COMPLETE,
+        "execution_state": ExecutionState.WAITING,
+        "legacy_terminal": False,
+        "events": [
+            {
+                "data": {
+                    "manifest": {"level": "raw", "name": "onboard-only.raw"},
+                },
+            },
+        ],
+    }
+
+    enriched = enrich_mission(mission)
+
+    assert enriched["onboard_products"] == []
