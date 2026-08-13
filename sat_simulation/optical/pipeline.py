@@ -144,9 +144,39 @@ class OpticalPipeline:
         )
         return manifest, raw_path
 
-    def process(
+    def process_l0_from_raw(
         self,
         *,
+        raw_path: Path,
+        scene_path: Path,
+        output_dir: Path,
+        run_id: str,
+        mission_id: str,
+    ) -> tuple[ProductManifest, Path]:
+        """Reconstruct L0 DN on the platform from received detector RAW packets."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(scene_path) as src:
+            shape = (src.count, src.height, src.width)
+            truth = src.read().astype(np.float64) / 65535.0
+        expected_dn, _bad_mask = self._simulate_detector(truth)
+        l0 = self._read_raw(raw_path, shape)
+        l0_path = output_dir / f"{mission_id}_l0.npy"
+        np.save(l0_path, l0, allow_pickle=False)
+        manifest = self._manifest(
+            path=l0_path,
+            level=ProductLevel.L0,
+            mime="application/x-npy",
+            run_id=run_id,
+            mission_id=mission_id,
+            lineage=[raw_path.name],
+            quality={"reconstruction_equal": bool(np.array_equal(expected_dn, l0))},
+        )
+        return manifest, l0_path
+
+    def process_l1_from_l0(
+        self,
+        *,
+        l0_path: Path,
         scene_path: Path,
         scene: SceneMetadata,
         output_dir: Path,
@@ -154,7 +184,9 @@ class OpticalPipeline:
         mission_id: str,
         captured_at: datetime,
         spacecraft_state: dict[str, Any],
+        input_manifests: list[ProductManifest] | None = None,
     ) -> OpticalProducts:
+        """Generate L1A/L1B/STAC on the GPU payload from L0 plus ancillary state."""
         output_dir.mkdir(parents=True, exist_ok=True)
         with rasterio.open(scene_path) as src:
             truth_u16 = src.read().astype(np.uint16)
@@ -162,14 +194,8 @@ class OpticalPipeline:
             transform = src.transform
             crs = src.crs
         truth = truth_u16.astype(np.float64) / 65535.0
-        dn, bad_mask = self._simulate_detector(truth)
-
-        raw_path = output_dir / f"{mission_id}_raw.bin"
-        if not raw_path.exists():
-            self._write_raw(raw_path, dn)
-        l0 = self._read_raw(raw_path, dn.shape)
-        l0_path = output_dir / f"{mission_id}_l0.npy"
-        np.save(l0_path, l0, allow_pickle=False)
+        _expected_dn, bad_mask = self._simulate_detector(truth)
+        l0 = np.load(l0_path, allow_pickle=False)
 
         l1a_path = output_dir / f"{mission_id}_l1a.tif"
         l1a_profile = profile | {"dtype": "uint16", "compress": "deflate"}
@@ -215,33 +241,16 @@ class OpticalPipeline:
         stac_path = output_dir / f"{mission_id}_stac-item.json"
 
         rmse = float(np.sqrt(np.mean((corrected - truth) ** 2)))
-        paths = {
-            ProductLevel.RAW: raw_path,
-            ProductLevel.L0: l0_path,
-            ProductLevel.L1A: l1a_path,
-            ProductLevel.L1B: l1b_path,
-            ProductLevel.THUMBNAIL: thumbnail_path,
-            ProductLevel.STAC: stac_path,
-        }
+        l0_manifest = self._manifest(
+            path=l0_path,
+            level=ProductLevel.L0,
+            mime="application/x-npy",
+            run_id=run_id,
+            mission_id=mission_id,
+            lineage=[],
+            quality={"source": "optical_payload"},
+        )
         manifests = [
-            self._manifest(
-                path=raw_path,
-                level=ProductLevel.RAW,
-                mime="application/octet-stream",
-                run_id=run_id,
-                mission_id=mission_id,
-                lineage=[],
-                quality={"packet_count": int(dn.shape[0] * dn.shape[1])},
-            ),
-            self._manifest(
-                path=l0_path,
-                level=ProductLevel.L0,
-                mime="application/x-npy",
-                run_id=run_id,
-                mission_id=mission_id,
-                lineage=[raw_path.name],
-                quality={"reconstruction_equal": bool(np.array_equal(dn, l0))},
-            ),
             self._manifest(
                 path=l1a_path,
                 level=ProductLevel.L1A,
@@ -249,7 +258,7 @@ class OpticalPipeline:
                 run_id=run_id,
                 mission_id=mission_id,
                 lineage=[l0_path.name],
-                quality={"ancillary_attached": True},
+                quality={"ancillary_attached": True, "processor_node": "gpu"},
             ),
             self._manifest(
                 path=l1b_path,
@@ -261,6 +270,7 @@ class OpticalPipeline:
                 quality={
                     "truth_rmse": rmse,
                     "bad_pixel_count": int(bad_mask.sum()),
+                    "processor_node": "gpu",
                     "noise_mode": "disabled"
                     if self.sensor.read_noise_dn == 0 and self.sensor.prnu_sigma == 0
                     else "configured",
@@ -273,10 +283,12 @@ class OpticalPipeline:
                 run_id=run_id,
                 mission_id=mission_id,
                 lineage=[l1b_path.name],
-                quality={},
+                quality={"processor_node": "gpu"},
             ),
         ]
-        stac = self._stac_item(scene, captured_at, manifests, transform, l0.shape)
+        stac = self._stac_item(
+            scene, captured_at, [*(input_manifests or []), l0_manifest, *manifests], transform, l0.shape
+        )
         stac_path.write_text(json.dumps(stac, ensure_ascii=False, indent=2), encoding="utf-8")
         manifests.append(
             self._manifest(
@@ -286,10 +298,78 @@ class OpticalPipeline:
                 run_id=run_id,
                 mission_id=mission_id,
                 lineage=[manifest.name for manifest in manifests],
-                quality={"stac_version": "1.1.0"},
+                quality={"stac_version": "1.1.0", "processor_node": "gpu"},
             )
         )
-        return OpticalProducts(manifests=manifests, paths=paths, truth_path=scene_path)
+        return OpticalProducts(
+            manifests=manifests,
+            paths={
+                ProductLevel.L0: l0_path,
+                ProductLevel.L1A: l1a_path,
+                ProductLevel.L1B: l1b_path,
+                ProductLevel.THUMBNAIL: thumbnail_path,
+                ProductLevel.STAC: stac_path,
+            },
+            truth_path=scene_path,
+        )
+
+    def process(
+        self,
+        *,
+        scene_path: Path,
+        scene: SceneMetadata,
+        output_dir: Path,
+        run_id: str,
+        mission_id: str,
+        captured_at: datetime,
+        spacecraft_state: dict[str, Any],
+    ) -> OpticalProducts:
+        raw_path = output_dir / f"{mission_id}_raw.bin"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if not raw_path.exists():
+            with rasterio.open(scene_path) as src:
+                truth = src.read().astype(np.float64) / 65535.0
+            dn, _bad_mask = self._simulate_detector(truth)
+            self._write_raw(raw_path, dn)
+        raw_manifest = self._manifest(
+            path=raw_path,
+            level=ProductLevel.RAW,
+            mime="application/octet-stream",
+            run_id=run_id,
+            mission_id=mission_id,
+            lineage=[],
+            quality={},
+        )
+        l0_manifest, l0_path = self.process_l0_from_raw(
+            raw_path=raw_path,
+            scene_path=scene_path,
+            output_dir=output_dir,
+            run_id=run_id,
+            mission_id=mission_id,
+        )
+        l1_products = self.process_l1_from_l0(
+            l0_path=l0_path,
+            scene_path=scene_path,
+            scene=scene,
+            output_dir=output_dir,
+            run_id=run_id,
+            mission_id=mission_id,
+            captured_at=captured_at,
+            spacecraft_state=spacecraft_state,
+            input_manifests=[raw_manifest],
+        )
+        return OpticalProducts(
+            manifests=[
+                raw_manifest,
+                l0_manifest,
+                *l1_products.manifests,
+            ],
+            paths={
+                ProductLevel.RAW: raw_path,
+                **l1_products.paths,
+            },
+            truth_path=scene_path,
+        )
 
     def raw_quicklook(self, *, raw_path: Path, scene_path: Path, destination: Path) -> None:
         """Render a debug-only preview from reconstructed detector DN packets."""

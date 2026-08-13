@@ -124,9 +124,9 @@ async def test_cancelled_mission_releases_scenario_and_preserves_history(tmp_pat
         await repository.close()
 
 
-def test_processing_macro_finishes_with_l1b_status() -> None:
+def test_processing_macro_prepares_l1_context_status() -> None:
     target_phase, substage, _label, status = PHASE_FLOW[MissionPhase.CAPTURE_COMPLETE]
 
     assert target_phase == MissionPhase.PROCESSING_COMPLETE
     assert substage == "processing"
-    assert status == MissionStatus.L1B_PROCESSING
+    assert status == MissionStatus.L1A_PROCESSING

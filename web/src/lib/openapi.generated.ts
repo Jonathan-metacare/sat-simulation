@@ -824,7 +824,7 @@ export interface components {
          * ProductLevel
          * @enum {string}
          */
-        ProductLevel: "raw" | "l0" | "l1a" | "l1b" | "thumbnail" | "stac" | "ai_result" | "result_package";
+        ProductLevel: "raw" | "l0" | "l1a" | "l1b" | "aux_context" | "thumbnail" | "stac" | "ai_result" | "result_package";
         /** ProductManifest */
         ProductManifest: {
             /** Id */

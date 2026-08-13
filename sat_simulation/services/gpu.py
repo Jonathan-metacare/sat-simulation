@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from contextlib import asynccontextmanager
@@ -24,13 +25,25 @@ from sat_simulation.common.models import (
     NodeKind,
     NodeSnapshot,
     ProductManifest,
+    ProductLevel,
     ProtocolFrameTrace,
     ProtocolTransaction,
     default_link_profiles,
 )
 from sat_simulation.common.protocol import Frame, MessageType
-from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
+from sat_simulation.common.wire import (
+    pack_json,
+    pack_product_bundle,
+    unpack_json,
+    unpack_product_bundle,
+)
 from sat_simulation.config import Settings, settings
+from sat_simulation.optical.pipeline import (
+    OpticalPipeline,
+    SceneMetadata,
+    SensorConfig,
+    ensure_demo_scene,
+)
 from sat_simulation.payload.providers import (
     OpenAICompatibleLanguageProvider,
     YOLOHTTPProvider,
@@ -46,6 +59,7 @@ class GPUState:
         self.settings = app_settings
         self.data_dir = app_settings.data_dir / "gpu"
         self.jobs_dir = self.data_dir / "jobs"
+        self.scene_dir = self.data_dir / "scenes"
         self.receiver = TCPReceiver(self.handle_job)
         self.jobs: dict[str, dict[str, Any]] = {}
 
@@ -66,6 +80,8 @@ class GPUState:
 
     async def start(self) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
+        self.scene_dir.mkdir(parents=True, exist_ok=True)
+        ensure_demo_scene(self.scene_dir)
         await self.receiver.start(self.settings.host, self.settings.gpu_gtx_port)
         for state_path in self.jobs_dir.glob("*/job.json"):
             try:
@@ -100,27 +116,80 @@ class GPUState:
         self, message_type: MessageType, payload: bytes, frame: Frame
     ) -> dict[str, Any]:
         mission_id = str(frame.mission_id)
-        if message_type == MessageType.AI_JOB:
-            manifest, content = unpack_product(payload)
-            mission_id = manifest.mission_id
-            digest = hashlib.sha256(content).hexdigest()
-            if digest != manifest.sha256:
-                raise ValueError("GTX L1B SHA-256 mismatch")
+        if message_type == MessageType.L1_JOB:
+            manifests, files = unpack_product_bundle(payload)
+            l0_manifest = next((item for item in manifests if item.level == ProductLevel.L0), None)
+            context_manifest = next((item for item in manifests if item.level == ProductLevel.AUX_CONTEXT), None)
+            if not l0_manifest or not context_manifest:
+                raise ValueError("GPU L1_JOB requires L0 and auxiliary context")
+            mission_id = l0_manifest.mission_id
+            l0_content = files[l0_manifest.name]
+            l0_digest = hashlib.sha256(l0_content).hexdigest()
+            if l0_digest != l0_manifest.sha256:
+                raise ValueError("GTX L0 SHA-256 mismatch")
+            context_content = files[context_manifest.name]
+            if hashlib.sha256(context_content).hexdigest() != context_manifest.sha256:
+                raise ValueError("GTX L1 context SHA-256 mismatch")
+            context = json.loads(context_content.decode("utf-8"))
             mission_dir = self.jobs_dir / mission_id
             mission_dir.mkdir(parents=True, exist_ok=True)
-            path = mission_dir / manifest.name
-            path.write_bytes(content)
-            thumbnail = mission_dir / f"{mission_id}_gpu_thumbnail.png"
-            self.make_thumbnail(path, thumbnail)
+            l0_path = mission_dir / l0_manifest.name
+            l0_path.write_bytes(l0_content)
+            scene_source = self.settings.data_dir / "platform" / "scenes" / f"{context['scene']['scene_id']}.tif"
+            if not scene_source.exists():
+                scene_source = self.scene_dir / f"{context['scene']['scene_id']}.tif"
+            if not scene_source.exists():
+                raise ValueError(f"GPU cannot access read-only scene {context['scene']['scene_id']}")
+            pipeline = OpticalPipeline(SensorConfig(seed=int(context.get("sensor_seed") or 20260811)))
+            products = await asyncio.to_thread(
+                pipeline.process_l1_from_l0,
+                l0_path=l0_path,
+                scene_path=scene_source,
+                scene=SceneMetadata(**context["scene"]),
+                output_dir=mission_dir,
+                run_id=l0_manifest.run_id,
+                mission_id=mission_id,
+                captured_at=datetime.fromisoformat(context["captured_at"]),
+                spacecraft_state=context["spacecraft"],
+                input_manifests=[l0_manifest],
+            )
+            l1b_manifest = next(item for item in products.manifests if item.level == ProductLevel.L1B)
             self.jobs[mission_id] = {
-                "manifest": manifest.model_dump(mode="json"),
-                "path": str(path),
-                "thumbnail_path": str(thumbnail),
-                "received_sha256": digest,
-                "status": "received",
+                "l0_manifest": l0_manifest.model_dump(mode="json"),
+                "manifest": l1b_manifest.model_dump(mode="json"),
+                "products": {item.level: item.model_dump(mode="json") for item in products.manifests},
+                "path": str(products.paths[ProductLevel.L1B]),
+                "thumbnail_path": str(products.paths[ProductLevel.THUMBNAIL]),
+                "received_sha256": l0_digest,
+                "l1b_sha256": l1b_manifest.sha256,
+                "status": "l1_ready",
             }
+            clock = SimulationClock(
+                datetime.fromtimestamp(frame.simulated_time_ns / 1_000_000_000, tz=UTC), rate=1
+            )
+            transport = TCPTransport(
+                profile=default_link_profiles()[LinkKind.GTX], clock=clock,
+                trace_sink=self.report_trace, source_node=NodeKind.GPU,
+                target_node=NodeKind.PLATFORM,
+            )
+            result = await transport.send(
+                self.settings.platform_gtx_result_host,
+                self.settings.platform_gtx_result_port,
+                run_id=l0_manifest.run_id,
+                mission_id=mission_id,
+                message_type=MessageType.L1_PRODUCTS,
+                payload=pack_product_bundle(
+                    products.manifests,
+                    {item.id: products.paths[item.level] for item in products.manifests},
+                ),
+            )
             self.save_job(mission_id)
-            return {"received_sha256": digest, "job_status": "received"}
+            return {
+                "received_sha256": l0_digest,
+                "l1b_sha256": l1b_manifest.sha256,
+                "l1_gtx_bytes": result.total_bytes,
+                "job_status": "l1_ready",
+            }
 
         if message_type != MessageType.AI_EXECUTE:
             raise ValueError(f"unsupported GTX message type {message_type.name}")
@@ -214,18 +283,19 @@ class GPUState:
         job = self.jobs.get(mission_id)
         if not job:
             raise KeyError(mission_id)
-        manifest = ProductManifest.model_validate(job["manifest"])
-        artifacts = [NodeArtifact(
-            key="l1b", name=manifest.name, level="l1b", mime_type=manifest.mime_type,
-            size_bytes=manifest.size_bytes, sha256=manifest.sha256, previewable=False,
-        )]
-        thumbnail = Path(str(job.get("thumbnail_path", "")))
-        if thumbnail.is_file():
-            artifacts.append(NodeArtifact(
-                key="thumbnail", name=thumbnail.name, level="thumbnail", mime_type="image/png",
-                size_bytes=thumbnail.stat().st_size,
-                sha256=hashlib.sha256(thumbnail.read_bytes()).hexdigest(), previewable=True,
-            ))
+        products = {
+            ProductLevel(level): ProductManifest.model_validate(value)
+            for level, value in dict(job.get("products") or {}).items()
+        }
+        artifacts = [
+            NodeArtifact(
+                key=level.value, name=manifest.name, level=level.value,
+                mime_type=manifest.mime_type, size_bytes=manifest.size_bytes,
+                sha256=manifest.sha256,
+                previewable=level in {ProductLevel.THUMBNAIL, ProductLevel.STAC},
+            )
+            for level, manifest in products.items()
+        ]
         result = self.jobs_dir / mission_id / "ai_result.json"
         if result.is_file():
             artifacts.append(NodeArtifact(
@@ -238,7 +308,8 @@ class GPUState:
             observation_notice="仿真观察数据，未通过星地下传",
             state={
                 "received_sha256": job.get("received_sha256"),
-                "sha_verified": job.get("received_sha256") == manifest.sha256,
+                "l0_sha256": job.get("received_sha256"),
+                "l1b_sha256": job.get("l1b_sha256"),
                 "provider_mode": job.get("result", {}).get("ai_mode"),
                 "result": job.get("result"),
             }, artifacts=artifacts,
@@ -249,13 +320,11 @@ class GPUState:
         if not job:
             raise KeyError(mission_id)
         choices = {
-            "l1b": (
-                Path(str(job["path"])),
-                ProductManifest.model_validate(job["manifest"]).mime_type,
-            ),
-            "thumbnail": (Path(str(job["thumbnail_path"])), "image/png"),
             "ai_result": (self.jobs_dir / mission_id / "ai_result.json", "application/json"),
         }
+        for level, value in dict(job.get("products") or {}).items():
+            manifest = ProductManifest.model_validate(value)
+            choices[str(level)] = (Path(str(manifest.artifact_path)), manifest.mime_type)
         if key not in choices:
             raise KeyError(key)
         path, mime = choices[key]

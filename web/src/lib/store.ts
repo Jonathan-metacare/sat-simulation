@@ -2,11 +2,18 @@ import { create } from "zustand";
 
 import type { MissionDetail, ScenarioRecord } from "./types";
 
+export type Locale = "zh" | "en";
+export type ThemeMode = "dark" | "light";
+
 interface DashboardState {
   scenario?: ScenarioRecord;
   mission?: MissionDetail;
+  locale: Locale;
+  theme: ThemeMode;
   setScenario: (value: ScenarioRecord) => void;
   setMission: (value?: MissionDetail) => void;
+  setLocale: (value: Locale) => void;
+  setTheme: (value: ThemeMode) => void;
 }
 
 function lastSequence(mission?: MissionDetail) {
@@ -21,6 +28,8 @@ function isOlderMission(current: MissionDetail, incoming: MissionDetail) {
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
+  locale: "zh",
+  theme: "dark",
   setScenario: (scenario) => set({ scenario }),
   setMission: (mission) => set((current) => {
     if (
@@ -32,4 +41,6 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     }
     return { mission };
   }),
+  setLocale: (locale) => set({ locale }),
+  setTheme: (theme) => set({ theme }),
 }));

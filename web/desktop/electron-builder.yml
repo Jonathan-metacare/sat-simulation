@@ -1,0 +1,32 @@
+appId: ai.spacezenith.sat-simulation
+productName: 星上智能计算数字孪生
+directories:
+  output: release
+  buildResources: desktop/build
+files:
+  - desktop/main.mjs
+  - desktop/preload.mjs
+  - package.json
+  - "!node_modules/.cache/**"
+asar: true
+asarUnpack:
+  - "**/*.node"
+  - "**/sharp/**"
+extraResources:
+  - from: .next/standalone
+    to: web
+  - from: .next/static
+    to: web/.next/static
+  - from: public
+    to: web/public
+  - from: desktop/python-dist/sat-sim-service
+    to: python/sat-sim-service
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  category: public.app-category.developer-tools
+  hardenedRuntime: false
+dmg:
+  title: 星上智能计算数字孪生

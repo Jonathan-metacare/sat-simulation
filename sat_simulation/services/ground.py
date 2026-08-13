@@ -72,7 +72,7 @@ PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
         MissionPhase.PROCESSING_COMPLETE,
         "processing",
         "执行产品处理",
-        MissionStatus.L1B_PROCESSING,
+        MissionStatus.L1A_PROCESSING,
     ),
     MissionPhase.PROCESSING_COMPLETE: (
         MissionPhase.GTX_COMPLETE,

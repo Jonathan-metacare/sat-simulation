@@ -1,13 +1,19 @@
 {
   "name": "sat-simulation-web",
   "version": "0.1.0",
+  "description": "Satellite onboard AI software-in-the-loop desktop dashboard",
+  "author": "SpaceZenith",
   "private": true,
   "type": "module",
+  "main": "desktop/main.mjs",
   "scripts": {
     "copy:cesium": "node scripts/copy-cesium.mjs",
     "dev": "pnpm copy:cesium && next dev",
     "build": "pnpm copy:cesium && next build",
     "start": "next start",
+    "desktop:dev": "electron desktop/main.mjs",
+    "desktop:python": "node desktop/scripts/build-python.mjs",
+    "desktop:dist": "pnpm build && pnpm desktop:python && electron-builder --config desktop/electron-builder.yml --mac dmg --arm64",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "generate:api": "../.venv/bin/python ../scripts/export_openapi.py && openapi-typescript openapi.json -o src/lib/openapi.generated.ts",
@@ -31,6 +37,8 @@
     "@types/node": "^24.2.1",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
+    "electron": "^37.10.3",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.33.0",
     "eslint-config-next": "^15.4.10",
     "openapi-typescript": "^7.9.1",
@@ -38,5 +46,8 @@
     "tailwindcss": "^4.1.11",
     "typescript": "^5.9.2"
   },
-  "packageManager": "pnpm@10.26.2"
+  "packageManager": "pnpm@10.26.2",
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron"]
+  }
 }

@@ -15,5 +15,6 @@ node_modules/
 *.tsbuildinfo
 .playwright-cli/
 web/public/cesium/
+web/release/
 runtime-data/
 *.log

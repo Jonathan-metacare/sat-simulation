@@ -47,7 +47,7 @@ export interface TelemetryEvent {
 }
 export interface ProductManifest {
   id: string; run_id: string; mission_id: string;
-  level: "raw" | "l0" | "l1a" | "l1b" | "thumbnail" | "stac" | "ai_result" | "result_package";
+  level: "raw" | "l0" | "l1a" | "l1b" | "aux_context" | "thumbnail" | "stac" | "ai_result" | "result_package";
   name: string; mime_type: string; size_bytes: number; sha256: string;
   created_at: string; quality: Record<string, unknown>; lineage: string[];
 }

@@ -41,7 +41,13 @@ from sat_simulation.common.models import (
 )
 from sat_simulation.common.orbit import target_attitude
 from sat_simulation.common.protocol import Frame, MessageType, crc32c
-from sat_simulation.common.wire import pack_json, pack_product, unpack_json
+from sat_simulation.common.wire import (
+    pack_json,
+    pack_product,
+    pack_product_bundle,
+    unpack_json,
+    unpack_product_bundle,
+)
 from sat_simulation.config import Settings, settings
 from sat_simulation.optical.pipeline import (
     OpticalPipeline,
@@ -60,7 +66,7 @@ class PlatformState:
         self.product_dir = self.data_dir / "products"
         self.task_dir = self.data_dir / "tasks"
         self.uplink_receiver = TCPReceiver(self.handle_uplink)
-        self.result_receiver = TCPReceiver(self.handle_ai_result)
+        self.result_receiver = TCPReceiver(self.handle_gtx_result)
         self.missions: dict[str, dict[str, Any]] = {}
 
     async def report_trace(self, value: ProtocolTransaction | ProtocolFrameTrace) -> None:
@@ -207,9 +213,31 @@ class PlatformState:
             }
         raise ValueError(f"unsupported uplink message type {message_type.name}")
 
-    async def handle_ai_result(
+    async def handle_gtx_result(
         self, message_type: MessageType, payload: bytes, _frame: Frame
     ) -> dict[str, Any]:
+        if message_type == MessageType.L1_PRODUCTS:
+            manifests, files = unpack_product_bundle(payload)
+            mission_id = manifests[0].mission_id if manifests else ""
+            state = self.missions.get(mission_id)
+            if not state:
+                raise ValueError("unknown mission in L1_PRODUCTS")
+            directory = self.product_dir / mission_id
+            directory.mkdir(parents=True, exist_ok=True)
+            stored: list[str] = []
+            for manifest in manifests:
+                content = files[manifest.name]
+                if hashlib.sha256(content).hexdigest() != manifest.sha256:
+                    raise ValueError(f"L1 product SHA-256 mismatch: {manifest.name}")
+                path = directory / manifest.name
+                path.write_bytes(content)
+                value = manifest.model_dump(mode="json")
+                value["artifact_path"] = str(path)
+                state["products"][manifest.level] = value
+                stored.append(manifest.level.value)
+            self.persist(mission_id)
+            return {"stored": stored, "count": len(stored)}
+
         if message_type != MessageType.AI_RESULT:
             raise ValueError(f"unsupported GTX result type {message_type.name}")
         body = unpack_json(payload)
@@ -317,7 +345,7 @@ class PlatformState:
                     {
                         "event_type": "raw_stored",
                         "status": MissionStatus.CAPTURING,
-                        "message": "曝光完成，RAW 分包数据已保存到星务卷。",
+                        "message": "曝光完成，光学载荷已将 RAW 分包数据返回星务平台。",
                         "data": {"manifest": manifest.model_dump(mode="json")},
                     },
                 ]
@@ -329,39 +357,73 @@ class PlatformState:
                 MissionPhase.PROCESSING_COMPLETE,
             }:
                 raise HTTPException(409, "星务任务阶段不允许产品处理")
+            raw_manifest = ProductManifest.model_validate(state["products"].get(ProductLevel.RAW))
+            raw_path = Path(str(raw_manifest.artifact_path))
             scene_path, scene = self.scene_metadata(command)
-            products = await asyncio.to_thread(
-                pipeline.process,
+            l0_manifest, l0_path = await asyncio.to_thread(
+                pipeline.process_l0_from_raw,
+                raw_path=raw_path,
                 scene_path=scene_path,
-                scene=scene,
                 output_dir=mission_dir,
                 run_id=command.run_id,
                 mission_id=mission_id,
-                captured_at=datetime.fromisoformat(state["captured_at"]),
-                spacecraft_state=state["spacecraft"],
             )
-            state["products"] = {
-                item.level: item.model_dump(mode="json") for item in products.manifests
+            state["products"][ProductLevel.L0] = l0_manifest.model_dump(mode="json")
+            state["products"][ProductLevel.L0]["artifact_path"] = str(l0_path)
+            l0_manifest = ProductManifest.model_validate(state["products"][ProductLevel.L0])
+            state["l1_context"] = {
+                "scene": scene.__dict__,
+                "captured_at": state["captured_at"],
+                "spacecraft": state["spacecraft"],
+                "sensor_seed": scenario.seed,
+                "l0": l0_manifest.model_dump(mode="json"),
             }
             state["phase"] = MissionPhase.PROCESSING_COMPLETE
-            for level, status in [
-                (ProductLevel.L0, MissionStatus.L0_PROCESSING),
-                (ProductLevel.L1A, MissionStatus.L1A_PROCESSING),
-                (ProductLevel.L1B, MissionStatus.L1B_PROCESSING),
-            ]:
-                events.append(
-                    {
-                        "event_type": f"{level.value}_processing_completed",
-                        "status": status,
-                        "message": f"{level.value.upper()} 产品处理并保存成功。",
-                        "data": {"manifest": state["products"][level]},
-                    }
-                )
+            events.append(
+                {
+                    "event_type": "l0_processing_completed",
+                    "status": MissionStatus.L1A_PROCESSING,
+                    "message": "星务平台已完成 RAW 到 L0 重组，并将姿态、场景辅助数据与 L0 组织为 GPU L1 处理输入。",
+                    "data": {"manifest": state["products"][ProductLevel.L0], "context": state["l1_context"]},
+                }
+            )
 
         elif stage == "gtx":
             if state["phase"] not in {MissionPhase.PROCESSING_COMPLETE, MissionPhase.GTX_COMPLETE}:
                 raise HTTPException(409, "星务任务阶段不允许 GTX 传输")
-            manifest = ProductManifest.model_validate(state["products"][ProductLevel.L1B])
+            if ProductLevel.L1B in state["products"]:
+                state["phase"] = MissionPhase.GTX_COMPLETE
+                events.append(
+                    {
+                        "event_type": "l1_products_reused",
+                        "status": MissionStatus.GTX_TRANSFER,
+                        "message": "星务已持有 GPU 回传的 L1 产品，本次重试直接复用。",
+                        "data": {"products": [
+                            state["products"][level] for level in (
+                                ProductLevel.L1A, ProductLevel.L1B, ProductLevel.THUMBNAIL, ProductLevel.STAC
+                            ) if level in state["products"]
+                        ]},
+                    }
+                )
+                self.persist(mission_id)
+                return {"events": events, "phase": state["phase"], "products": list(state["products"].values())}
+            l0_manifest = ProductManifest.model_validate(state["products"][ProductLevel.L0])
+            l0_path = Path(str(l0_manifest.artifact_path))
+            context_path = mission_dir / f"{mission_id}_l1_context.json"
+            context_path.write_text(json.dumps(state["l1_context"], ensure_ascii=False, indent=2), "utf-8")
+            context_manifest = ProductManifest(
+                run_id=command.run_id,
+                mission_id=mission_id,
+                level=ProductLevel.AUX_CONTEXT,
+                name=context_path.name,
+                mime_type="application/json",
+                size_bytes=context_path.stat().st_size,
+                sha256=sha256_file(context_path),
+                processing_parameters={"purpose": "gpu_l1_context"},
+                quality={"ancillary_context": True},
+                lineage=[l0_manifest.name],
+                artifact_path=str(context_path),
+            )
             clock = self.clock_for(simulated_at)
             transport = TCPTransport(
                 profile=default_link_profiles()[LinkKind.GTX],
@@ -377,21 +439,33 @@ class PlatformState:
                 self.settings.gpu_gtx_port,
                 run_id=command.run_id,
                 mission_id=mission_id,
-                message_type=MessageType.AI_JOB,
-                payload=pack_product(manifest, Path(str(manifest.artifact_path))),
+                message_type=MessageType.L1_JOB,
+                payload=pack_product_bundle(
+                    [l0_manifest, context_manifest],
+                    {l0_manifest.id: l0_path, context_manifest.id: context_path},
+                ),
             )
-            if transfer.response.get("received_sha256") != manifest.sha256:
-                raise HTTPException(502, "GPU 返回的 L1B SHA-256 不一致")
+            if not transfer.response.get("l1b_sha256"):
+                raise HTTPException(502, "GPU 未返回 L1B 产品确认")
+            if ProductLevel.L1B not in state["products"]:
+                raise HTTPException(502, "GPU 未通过 GTX 回传 L1_PRODUCTS")
             state["phase"] = MissionPhase.GTX_COMPLETE
             record = self.transfer_record(
-                command, LinkKind.GTX, manifest.name, manifest.sha256, transfer
+                command, LinkKind.GTX, l0_manifest.name, l0_manifest.sha256, transfer
             )
             events.append(
                 {
                     "event_type": "gtx_transfer_completed",
                     "status": MissionStatus.GTX_TRANSFER,
-                    "message": "L1B 已经真实 GTX 字节流传至 GPU 并校验。",
-                    "data": {"record": record.model_dump(mode="json")},
+                    "message": "L0 与星务姿态辅助数据已通过 GTX 传至 GPU，GPU 完成 L1 并回传星务。",
+                    "data": {
+                        "record": record.model_dump(mode="json"),
+                        "products": [
+                            state["products"][level] for level in (
+                                ProductLevel.L1A, ProductLevel.L1B, ProductLevel.THUMBNAIL, ProductLevel.STAC
+                            ) if level in state["products"]
+                        ],
+                    },
                 }
             )
 
@@ -584,8 +658,18 @@ class PlatformState:
             public_state = {
                 "phase": state.get("phase"), "captured_at": state.get("captured_at"),
                 "sensor": sensor.__dict__, "scene_id": state["command"].get("scene_id"),
-                "raw_packets": sum(int(item.quality.get("packet_count", 0)) for item in products),
+                "raw_packets": sum(int(item.quality.get("packet_count", 0)) for item in products if item.level == ProductLevel.RAW),
                 "missing_packets": 0, "crc_failures": 0,
+            }
+        elif node == NodeKind.GPU:
+            products = [
+                item for item in products
+                if item.level in {ProductLevel.L1A, ProductLevel.L1B, ProductLevel.THUMBNAIL, ProductLevel.STAC, ProductLevel.AI_RESULT}
+            ]
+            public_state = {
+                "phase": state.get("phase"),
+                "l1_ready": ProductLevel.L1B in state.get("products", {}),
+                "ai_result": state.get("ai_result"),
             }
         else:
             public_state = {

@@ -1,6 +1,7 @@
 import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioRecord, TransferRecord } from "./types";
+import { desktopBridge } from "./desktop";
 
-export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
+export const API_BASE = (desktopBridge()?.apiBase ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
 
 async function request<T>(path:string, init?:RequestInit):Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers:{ "Content-Type":"application/json",...(init?.headers??{}) }, cache:"no-store" });

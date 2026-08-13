@@ -3,12 +3,15 @@
 import { useEffect, useMemo, useRef } from "react";
 import type * as Cesium from "cesium";
 
+import { translate } from "~/lib/i18n";
+import type { Locale } from "~/lib/store";
 import type { OrbitSample, OrbitTrack } from "~/lib/types";
 
 interface OrbitGlobeProps {
   track?: OrbitTrack;
   station: { name: string; latitude: number; longitude: number; altitudeM: number };
   target?: { name: string; latitude: number; longitude: number };
+  locale?: Locale;
 }
 
 type SceneInputs = OrbitGlobeProps;
@@ -192,7 +195,7 @@ function drawScene(
         outlineColor: C.Color.fromCssColorString("#facc15").withAlpha(0.55),
       },
       label: {
-        text: `目标 · ${target.name}`,
+        text: `${translate(inputs.locale ?? "zh", "orbit.target")} · ${target.name}`,
         font: "11px sans-serif",
         pixelOffset: new C.Cartesian2(0, 20),
         fillColor: C.Color.fromCssColorString("#fde68a"),
@@ -214,12 +217,12 @@ function formatDuration(milliseconds: number) {
   return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
-export function OrbitGlobe({ track, station, target }: OrbitGlobeProps) {
+export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobeProps) {
   const element = useRef<HTMLDivElement>(null);
   const viewer = useRef<Cesium.Viewer | undefined>(undefined);
   const cesium = useRef<typeof Cesium | undefined>(undefined);
   const latestInputs = useRef<SceneInputs>({ track, station, target });
-  latestInputs.current = { track, station, target };
+  latestInputs.current = { track, station, target, locale };
 
   useEffect(() => {
     if (!element.current) return;
@@ -228,6 +231,8 @@ export function OrbitGlobe({ track, station, target }: OrbitGlobeProps) {
       window.CESIUM_BASE_URL = process.env.NEXT_PUBLIC_CESIUM_BASE_URL ?? "/cesium/";
       const C = await import("cesium");
       if (disposed || !element.current) return;
+      const ionAccessToken = process.env.NEXT_PUBLIC_CESIUM_ION_ACCESS_TOKEN;
+      if (ionAccessToken) C.Ion.defaultAccessToken = ionAccessToken;
       const instance = new C.Viewer(element.current, {
         animation: false,
         timeline: false,
@@ -239,10 +244,15 @@ export function OrbitGlobe({ track, station, target }: OrbitGlobeProps) {
         fullscreenButton: false,
         infoBox: false,
         selectionIndicator: false,
-        baseLayer: false,
+        // Asset 2 is Cesium Ion World Imagery.  Without a configured token we
+        // intentionally retain the deterministic dark globe used by the SIL.
+        baseLayer: ionAccessToken
+          ? C.ImageryLayer.fromProviderAsync(C.IonImageryProvider.fromAssetId(2))
+          : false,
+        terrain: ionAccessToken ? C.Terrain.fromWorldTerrain() : undefined,
         skyBox: false,
       });
-      instance.scene.globe.baseColor = C.Color.fromCssColorString("#071722");
+      instance.scene.globe.baseColor = C.Color.fromCssColorString(ionAccessToken ? "#183c4d" : "#071722");
       instance.scene.backgroundColor = C.Color.fromCssColorString("#02080d");
       instance.scene.globe.enableLighting = true;
       viewer.current = instance;
@@ -264,39 +274,39 @@ export function OrbitGlobe({ track, station, target }: OrbitGlobeProps) {
   }, [station, target, track]);
 
   const passStatus = useMemo(() => {
-    if (!track) return { label: "等待轨道数据", value: "--" };
+    if (!track) return { label: translate(locale, "orbit.waiting"), value: "--" };
     const now = new Date(track.generated_at).getTime();
     const window = track.contact_windows[0];
-    if (!window) return { label: "未来 24h", value: "无过站" };
+    if (!window) return { label: translate(locale, "orbit.next24"), value: translate(locale, "orbit.noPass") };
     if (track.current.visible) {
-      return { label: "距离 LOS", value: formatDuration(new Date(window.los).getTime() - now) };
+      return { label: translate(locale, "orbit.toLos"), value: formatDuration(new Date(window.los).getTime() - now) };
     }
-    return { label: "距离 AOS", value: formatDuration(new Date(window.aos).getTime() - now) };
-  }, [track]);
+    return { label: translate(locale, "orbit.toAos"), value: formatDuration(new Date(window.aos).getTime() - now) };
+  }, [locale, track]);
 
   return (
     <div className="relative h-[360px] w-full flex-1 overflow-hidden bg-[#02080d] sm:h-[390px] xl:h-auto xl:min-h-[420px]">
       <div ref={element} className="absolute inset-0" aria-label="Cesium 轨道态势视图" />
       <div className="pointer-events-none absolute left-3 top-3 grid grid-cols-2 gap-2 sm:left-4 sm:top-4">
         <MapMetric
-          label="地面站仰角"
+          label={translate(locale, "orbit.elevation")}
           value={track ? `${track.current.elevation_deg.toFixed(1)}°` : "--"}
           active={track?.current.visible}
         />
         <MapMetric label={passStatus.label} value={passStatus.value} />
       </div>
       <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-white/10 bg-slate-950/75 px-3 py-2 text-right backdrop-blur sm:right-4 sm:top-4">
-        <div className="text-[9px] tracking-[.16em] text-slate-500 uppercase">接入判定</div>
+        <div className="text-[9px] tracking-[.16em] text-slate-500 uppercase">{translate(locale, "orbit.access")}</div>
         <div className={`mt-1 text-xs ${track?.current.visible ? "text-emerald-300" : "text-slate-300"}`}>
-          {track?.current.visible ? "几何可见" : "几何不可见"}
+          {track?.current.visible ? translate(locale, "orbit.visible") : translate(locale, "orbit.notVisible")}
         </div>
-        {track?.contact_mode === "deterministic" && <div className="mt-1 text-[9px] text-orange-300">任务链路使用确定性窗口</div>}
+        {track?.contact_mode === "deterministic" && <div className="mt-1 text-[9px] text-orange-300">{translate(locale, "orbit.deterministic")}</div>}
       </div>
       <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-white/[.07] bg-slate-950/70 px-3 py-2 text-[9px] text-slate-400 backdrop-blur sm:left-4 sm:right-auto">
-        <Legend color="#22d3ee" label="历史轨迹" />
-        <Legend color="#67e8f9" label="未来轨迹" dashed />
-        <Legend color="#4ade80" label="可见弧段" />
-        <Legend color="#fb923c" label="地面站覆盖" />
+        <Legend color="#22d3ee" label={translate(locale, "orbit.history")} />
+        <Legend color="#67e8f9" label={translate(locale, "orbit.forecast")} dashed />
+        <Legend color="#4ade80" label={translate(locale, "orbit.visibleArc")} />
+        <Legend color="#fb923c" label={translate(locale, "orbit.coverage")} />
       </div>
     </div>
   );

@@ -7,19 +7,24 @@ import remarkGfm from "remark-gfm";
 import { Cpu, Database, Download, FileImage, Radio, Satellite, ScanLine, ShieldCheck } from "lucide-react";
 
 import { api, nodeArtifactURL } from "~/lib/api";
+import { translate } from "~/lib/i18n";
+import type { Locale } from "~/lib/store";
 import type { MissionDetail, NodeArtifact, NodeKind, NodeSnapshot } from "~/lib/types";
 
-const titles: Record<Exclude<NodeKind, "ground">, { title: string; subtitle: string }> = {
-  platform: { title: "星务平台", subtitle: "任务状态机 · 姿态控制 · 星上存储 · 载荷与 GTX 总线" },
-  optical: { title: "光学载荷", subtitle: "PayloadDriver/1 · 传感器模型 · 曝光 · RAW 分包" },
-  gpu: { title: "GPU Payload", subtitle: "L1B 接收校验 · Provider · 模型上下文 · AI 结果" },
+const titles: Record<Exclude<NodeKind, "ground">, { title: Parameters<typeof translate>[1]; subtitle: Parameters<typeof translate>[1] }> = {
+  platform: { title: "node.platform.title", subtitle: "node.platform.subtitle" },
+  optical: { title: "node.optical.title", subtitle: "node.optical.subtitle" },
+  gpu: { title: "node.gpu.title", subtitle: "node.gpu.subtitle" },
 };
 
-export function NodeTab({ node, mission, providerHealth, gtxLink }: {
+export function NodeTab({ node, mission, providerHealth, gtxLink, locale = "zh" }: {
   node: Exclude<NodeKind, "ground">; mission?: MissionDetail;
   providerHealth: Record<string, { status: string }>;
   gtxLink?: { bandwidth_bps: number; latency_ms: number; frame_payload_bytes: number };
+  locale?: Locale;
 }) {
+  const t = (key: Parameters<typeof translate>[1], values?: Parameters<typeof translate>[2]) =>
+    translate(locale, key, values);
   const [snapshot, setSnapshot] = useState<NodeSnapshot>();
   useEffect(() => {
     if (!mission) { setSnapshot(undefined); return; }
@@ -38,46 +43,51 @@ export function NodeTab({ node, mission, providerHealth, gtxLink }: {
   const providerStatus = mission?.ai_mode === "llm"
     ? providerHealth.language?.status
     : providerHealth.detection?.status;
+  const observationNotice = snapshot?.observation_notice?.startsWith("仿真观察数据")
+    ? t("node.observationNotice")
+    : snapshot?.observation_notice?.startsWith("节点当前不可达")
+      ? t("node.unreachableNotice")
+      : snapshot?.observation_notice;
   return <div className="space-y-4">
     <section className="panel rounded-2xl p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="flex items-center gap-2 text-lg font-medium text-slate-100">{node === "platform" ? <Satellite className="text-cyan-300" /> : node === "optical" ? <ScanLine className="text-cyan-300" /> : <Cpu className="text-orange-300" />}{info.title}</h2><p className="mt-1 text-xs text-slate-500">{info.subtitle}</p></div>
-        <span className={`rounded-full border px-3 py-1 text-[10px] ${snapshot?.reachable === false ? "border-red-300/30 text-red-300" : "border-emerald-300/25 text-emerald-300"}`}>{snapshot?.reachable === false ? "NODE UNREACHABLE" : (snapshot?.status ?? "WAITING")}</span>
+        <div><h2 className="flex items-center gap-2 text-lg font-medium text-slate-100">{node === "platform" ? <Satellite className="text-cyan-300" /> : node === "optical" ? <ScanLine className="text-cyan-300" /> : <Cpu className="text-orange-300" />}{t(info.title)}</h2><p className="mt-1 text-xs text-slate-500">{t(info.subtitle)}</p></div>
+        <span className={`rounded-full border px-3 py-1 text-[10px] ${snapshot?.reachable === false ? "border-red-300/30 text-red-300" : "border-emerald-300/25 text-emerald-300"}`}>{snapshot?.reachable === false ? t("node.unreachable") : (snapshot?.status ?? t("node.waiting"))}</span>
       </div>
-      {snapshot?.observation_notice && <div className="mt-4 flex items-center gap-2 rounded-lg border border-orange-300/20 bg-orange-300/[.07] px-3 py-2 text-xs text-orange-200"><ShieldCheck size={14} />{snapshot.observation_notice}</div>}
+      {observationNotice && <div className="mt-4 flex items-center gap-2 rounded-lg border border-orange-300/20 bg-orange-300/[.07] px-3 py-2 text-xs text-orange-200"><ShieldCheck size={14} />{observationNotice}</div>}
     </section>
 
     {node === "platform" && <section className="panel rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="flex items-center gap-2 text-sm text-cyan-100"><Radio size={15} />Virtual GTX 链路</h3>
-        <span className="rounded border border-cyan-300/20 bg-cyan-300/10 px-2 py-1 text-[10px] text-cyan-200">星务平台 ↔ GPU Payload</span>
+        <h3 className="flex items-center gap-2 text-sm text-cyan-100"><Radio size={15} />{t("node.gtx")}</h3>
+        <span className="rounded border border-cyan-300/20 bg-cyan-300/10 px-2 py-1 text-[10px] text-cyan-200">{t("node.gtxPair")}</span>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        <NodeMetric label="带宽" value={formatRate(gtxLink?.bandwidth_bps ?? 0)} />
-        <NodeMetric label="单向延迟" value={`${gtxLink?.latency_ms ?? 0} ms`} />
-        <NodeMetric label="帧载荷" value={`${gtxLink?.frame_payload_bytes ?? 0} B`} />
+        <NodeMetric label={t("link.bandwidth")} value={formatRate(gtxLink?.bandwidth_bps ?? 0)} />
+        <NodeMetric label={t("link.latency")} value={`${gtxLink?.latency_ms ?? 0} ms`} />
+        <NodeMetric label={t("node.framePayload")} value={`${gtxLink?.frame_payload_bytes ?? 0} B`} />
       </div>
     </section>}
 
     {node === "gpu" && <section className="panel rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="flex items-center gap-2 text-sm text-cyan-100"><Cpu size={15} />智能载荷 Provider</h3>
+        <h3 className="flex items-center gap-2 text-sm text-cyan-100"><Cpu size={15} />{t("node.provider")}</h3>
         <span className="rounded border border-orange-300/20 bg-orange-300/10 px-2 py-1 text-[10px] text-orange-200">{providerStatus ?? "UNKNOWN"}</span>
       </div>
-      <p className="text-xs leading-5 text-slate-500">本任务固定使用 {mission?.ai_mode?.toUpperCase() ?? "YOLO"}。未配置或健康检查失败时，第五步会停在 blocked，可修复服务后原步重试；系统不会伪造结果。</p>
+      <p className="text-xs leading-5 text-slate-500">{t("node.providerNote", { mode: mission?.ai_mode?.toUpperCase() ?? "YOLO" })}</p>
     </section>}
 
     <section className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
       <div className="panel rounded-2xl p-4">
-        <h3 className="mb-4 flex items-center gap-2 text-sm text-cyan-100"><Database size={15} />节点状态</h3>
-        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-xl border border-white/[.06] bg-black/25 p-3 font-mono text-[11px] leading-5 text-slate-400">{JSON.stringify(snapshot?.state ?? { status: "尚无节点数据" }, null, 2)}</pre>
+        <h3 className="mb-4 flex items-center gap-2 text-sm text-cyan-100"><Database size={15} />{t("node.state")}</h3>
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-xl border border-white/[.06] bg-black/25 p-3 font-mono text-[11px] leading-5 text-slate-400">{JSON.stringify(snapshot?.state ?? { status: t("node.noState") }, null, 2)}</pre>
       </div>
       <div className="panel rounded-2xl p-4">
-        <h3 className="mb-4 flex items-center gap-2 text-sm text-cyan-100"><FileImage size={15} />节点本地产物</h3>
+        <h3 className="mb-4 flex items-center gap-2 text-sm text-cyan-100"><FileImage size={15} />{t("node.artifacts")}</h3>
         {thumbnail && mission && <div className="relative mb-4 min-h-56 overflow-hidden rounded-xl border border-white/[.06] bg-black/30"><Image unoptimized fill className="object-contain" sizes="50vw" src={nodeArtifactURL(mission.command.id, node, thumbnail.key)} alt="node local thumbnail" /></div>}
         <div className="grid gap-2 sm:grid-cols-2">{snapshot?.artifacts.map((artifact) => <ArtifactCard key={artifact.key} artifact={artifact} missionId={mission!.command.id} node={node} />)}</div>
-        {!snapshot?.artifacts.length && <div className="py-10 text-center text-xs text-slate-600">当前阶段尚未在此节点产生文件。</div>}
-        {node === "gpu" && aiResult?.result?.content && <div className="mt-4 rounded-xl border border-cyan-300/10 bg-black/20 p-4"><div className="mb-2 text-xs text-cyan-100">GPU 本地模型结果</div><div className="llm-markdown max-h-96 overflow-auto"><ReactMarkdown remarkPlugins={[remarkGfm]}>{aiResult.result.content}</ReactMarkdown></div></div>}
+        {!snapshot?.artifacts.length && <div className="py-10 text-center text-xs text-slate-600">{t("node.noArtifacts")}</div>}
+        {node === "gpu" && aiResult?.result?.content && <div className="mt-4 rounded-xl border border-cyan-300/10 bg-black/20 p-4"><div className="mb-2 text-xs text-cyan-100">{t("node.localResult")}</div><div className="llm-markdown max-h-96 overflow-auto"><ReactMarkdown remarkPlugins={[remarkGfm]}>{aiResult.result.content}</ReactMarkdown></div></div>}
       </div>
     </section>
   </div>;

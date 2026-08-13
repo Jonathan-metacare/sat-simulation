@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from zipfile import BadZipFile
 from typing import Any
 
 from sat_simulation.common.models import ProtocolPayloadView
 from sat_simulation.common.protocol import MessageType
-from sat_simulation.common.wire import unpack_product
+from sat_simulation.common.wire import unpack_product, unpack_product_bundle
 
 SENSITIVE_PARTS = ("key", "token", "secret", "auth", "password")
 JSON_MESSAGES = {
@@ -56,7 +57,11 @@ def describe_payload(message_type: MessageType, payload: bytes) -> ProtocolPaylo
                 )
         except (UnicodeDecodeError, ValueError):
             pass
-    if message_type in {MessageType.PRODUCT, MessageType.AI_JOB, MessageType.RESULT_PACKAGE}:
+    if message_type in {
+        MessageType.PRODUCT,
+        MessageType.AI_JOB,
+        MessageType.RESULT_PACKAGE,
+    }:
         try:
             manifest, content = unpack_product(payload)
             members = manifest.processing_parameters.get("members", {})
@@ -74,6 +79,29 @@ def describe_payload(message_type: MessageType, payload: bytes) -> ProtocolPaylo
                 },
             )
         except ValueError:
+            pass
+    if message_type in {MessageType.L1_JOB, MessageType.L1_PRODUCTS}:
+        try:
+            manifests, files = unpack_product_bundle(payload)
+            return ProtocolPayloadView(
+                kind="binary",
+                mime_type="application/zip",
+                summary={
+                    "envelope": "ProductBundle/1",
+                    "members": [
+                        {
+                            "name": item.name,
+                            "level": item.level,
+                            "content_bytes": len(files[item.name]),
+                            "sha256": item.sha256,
+                        }
+                        for item in manifests
+                    ],
+                    "bytes": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                },
+            )
+        except (BadZipFile, KeyError, ValueError, OSError):
             pass
     return ProtocolPayloadView(
         kind="binary" if payload else "none",

@@ -33,6 +33,8 @@ class MessageType(IntEnum):
     AI_EXECUTE = 10
     RESULT_REQUEST = 11
     RESULT_PACKAGE = 12
+    L1_PRODUCTS = 13
+    L1_JOB = 14
 
 
 def crc32c(data: bytes, crc: int = 0) -> int:

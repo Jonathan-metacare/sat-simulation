@@ -4,11 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Braces, CheckCircle2, Copy, FileDigit, Radio } from "lucide-react";
 
 import { api, protocolStreamURL } from "~/lib/api";
+import { translate } from "~/lib/i18n";
+import type { Locale } from "~/lib/store";
 import type { NodeKind, ProtocolFrameTrace, ProtocolTransaction } from "~/lib/types";
 
-const nodeLabels: Record<NodeKind, string> = {
-  ground: "地面站", platform: "星务平台", optical: "光学载荷", gpu: "GPU Payload",
-};
+function nodeLabel(locale: Locale, node: NodeKind) {
+  return translate(locale, `tabs.${node}` as Parameters<typeof translate>[1]);
+}
 
 function formatBytes(bytes = 0) {
   if (bytes < 1024) return `${bytes} B`;
@@ -16,9 +18,10 @@ function formatBytes(bytes = 0) {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
-export function ProtocolInspector({ missionId, runId, node }: {
-  missionId?: string; runId?: string; node?: NodeKind;
+export function ProtocolInspector({ missionId, runId, node, locale = "zh" }: {
+  missionId?: string; runId?: string; node?: NodeKind; locale?: Locale;
 }) {
+  const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
   const [transactions, setTransactions] = useState<ProtocolTransaction[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
   const [frames, setFrames] = useState<ProtocolFrameTrace[]>([]);
@@ -61,35 +64,35 @@ export function ProtocolInspector({ missionId, runId, node }: {
 
   return <div className="panel overflow-hidden rounded-2xl">
     <div className="flex items-center justify-between border-b border-white/[.06] px-4 py-3">
-      <h2 className="flex items-center gap-2 text-sm font-medium"><Radio size={16} className="text-cyan-300" />协议观察器</h2>
-      <span className="text-[10px] text-slate-500">事务 · 解码正文 · SIMF 帧</span>
+      <h2 className="flex items-center gap-2 text-sm font-medium"><Radio size={16} className="text-cyan-300" />{t("protocol.title")}</h2>
+      <span className="text-[10px] text-slate-500">{t("protocol.subtitle")}</span>
     </div>
     <div className="min-h-[360px] p-3">
       <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
         {visible.map((row) => <button key={row.id} onClick={() => setSelectedId(row.id)}
           className={`min-w-[190px] flex-1 rounded-lg border px-3 py-2 text-left transition ${selected?.id === row.id ? "border-cyan-300/35 bg-cyan-300/10" : "border-transparent bg-black/10 hover:bg-white/[.035]"}`}>
           <div className="flex items-center justify-between text-[10px]"><span className="text-cyan-200">{row.message_type}</span><span className={row.status === "running" ? "text-orange-300" : "text-emerald-300"}>{row.status}</span></div>
-          <div className="mt-1 text-xs text-slate-300">{nodeLabels[row.source_node]} → {nodeLabels[row.target_node]}</div>
-          <div className="mt-1 flex gap-3 text-[9px] text-slate-600"><span>{row.protocol}</span><span>{formatBytes(row.total_bytes)}</span><span>{row.frame_count} 帧</span></div>
+          <div className="mt-1 text-xs text-slate-300">{nodeLabel(locale, row.source_node)} → {nodeLabel(locale, row.target_node)}</div>
+          <div className="mt-1 flex gap-3 text-[9px] text-slate-600"><span>{row.protocol}</span><span>{formatBytes(row.total_bytes)}</span><span>{row.frame_count} {t("protocol.frames")}</span></div>
         </button>)}
-        {!visible.length && <div className="w-full py-10 text-center text-xs text-slate-600">{node ? "当前节点尚无协议事务。" : "当前任务尚无协议事务。"}</div>}
+        {!visible.length && <div className="w-full py-10 text-center text-xs text-slate-600">{node ? t("protocol.emptyNode") : t("protocol.emptyMission")}</div>}
       </div>
       <div className="min-w-0">
         {selected ? <>
           <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Metric label="链路" value={selected.link} /><Metric label="方向" value={selected.direction} />
-            <Metric label="重传" value={String(selected.retry_count)} /><Metric label="CRC 失败" value={String(selected.crc_failures)} />
+            <Metric label={t("protocol.link")} value={selected.link} /><Metric label={t("protocol.direction")} value={selected.direction} />
+            <Metric label={t("ground.retry")} value={String(selected.retry_count)} /><Metric label={t("protocol.crcFailures")} value={String(selected.crc_failures)} />
           </div>
           <div className="mb-4 rounded-xl border border-white/[.06] bg-black/20">
-            <div className="flex items-center justify-between border-b border-white/[.05] px-3 py-2 text-xs text-slate-300"><span className="flex items-center gap-2"><Braces size={14} />协议正文</span><button onClick={() => navigator.clipboard.writeText(JSON.stringify(selected.payload.decoded_json ?? selected.payload.summary, null, 2))} className="flex items-center gap-1 text-[10px] text-cyan-300"><Copy size={12} />复制</button></div>
+            <div className="flex items-center justify-between border-b border-white/[.05] px-3 py-2 text-xs text-slate-300"><span className="flex items-center gap-2"><Braces size={14} />{t("protocol.payload")}</span><button onClick={() => navigator.clipboard.writeText(JSON.stringify(selected.payload.decoded_json ?? selected.payload.summary, null, 2))} className="flex items-center gap-1 text-[10px] text-cyan-300"><Copy size={12} />{t("actions.copy")}</button></div>
             <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all p-3 font-mono text-[11px] leading-5 text-slate-400">{JSON.stringify(selected.payload.decoded_json ?? selected.payload.summary, null, 2)}</pre>
-            {selected.payload.redacted && <div className="border-t border-orange-300/15 px-3 py-2 text-[10px] text-orange-200">敏感字段已递归脱敏</div>}
+            {selected.payload.redacted && <div className="border-t border-orange-300/15 px-3 py-2 text-[10px] text-orange-200">{t("protocol.redacted")}</div>}
           </div>
           <div className="max-h-64 overflow-y-auto rounded-xl border border-white/[.06]">
-            <table className="w-full table-fixed text-left text-[10px]"><thead className="sticky top-0 bg-[#0a1b28] text-slate-500"><tr><th className="w-[14%] p-2">序号</th><th className="w-[24%]">类型</th><th className="w-[14%]">负载</th><th className="w-[18%]">CRC32C</th><th className="w-[10%]">尝试</th><th className="w-[20%]">ACK / NAK</th></tr></thead><tbody>{frames.map((frame) => <tr key={frame.id} className="border-t border-white/[.045] text-slate-400"><td className="p-2 font-mono">{frame.sequence}/{frame.total}</td><td className="break-words">{frame.message_type}</td><td>{formatBytes(frame.payload_bytes)}</td><td className={`break-all ${frame.crc_valid ? "text-emerald-300" : "text-red-300"}`}>{frame.crc32c ?? "--"}</td><td>{frame.attempt + 1}</td><td className="break-words">{frame.ack_status}{frame.missing_sequences.length ? ` [${frame.missing_sequences.join(", ")}]` : ""}</td></tr>)}</tbody></table>
-            {!frames.length && <div className="p-6 text-center text-xs text-slate-600">旧事务仅有汇总数据，或帧尚未到达。</div>}
+            <table className="w-full table-fixed text-left text-[10px]"><thead className="sticky top-0 bg-[#0a1b28] text-slate-500"><tr><th className="w-[14%] p-2">{t("protocol.sequence")}</th><th className="w-[24%]">{t("protocol.type")}</th><th className="w-[14%]">{t("protocol.payloadBytes")}</th><th className="w-[18%]">CRC32C</th><th className="w-[10%]">{t("protocol.attempt")}</th><th className="w-[20%]">{t("protocol.ack")}</th></tr></thead><tbody>{frames.map((frame) => <tr key={frame.id} className="border-t border-white/[.045] text-slate-400"><td className="p-2 font-mono">{frame.sequence}/{frame.total}</td><td className="break-words">{frame.message_type}</td><td>{formatBytes(frame.payload_bytes)}</td><td className={`break-all ${frame.crc_valid ? "text-emerald-300" : "text-red-300"}`}>{frame.crc32c ?? "--"}</td><td>{frame.attempt + 1}</td><td className="break-words">{frame.ack_status}{frame.missing_sequences.length ? ` [${frame.missing_sequences.join(", ")}]` : ""}</td></tr>)}</tbody></table>
+            {!frames.length && <div className="p-6 text-center text-xs text-slate-600">{t("protocol.noFrames")}</div>}
           </div>
-        </> : <div className="flex min-h-72 items-center justify-center text-xs text-slate-600"><FileDigit size={16} className="mr-2" />选择协议事务查看正文和帧。</div>}
+        </> : <div className="flex min-h-72 items-center justify-center text-xs text-slate-600"><FileDigit size={16} className="mr-2" />{t("protocol.select")}</div>}
       </div>
     </div>
   </div>;
