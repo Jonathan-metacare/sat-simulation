@@ -120,12 +120,12 @@ function sharedEnvironment() {
     SAT_SIM_PLATFORM_HTTP_URL: `http://127.0.0.1:${ports.platform}`,
     SAT_SIM_GPU_HTTP_URL: `http://127.0.0.1:${ports.gpu}`,
     SAT_SIM_GROUND_HTTP_URL: `http://127.0.0.1:${ports.ground}`,
-    SAT_SIM_LLM_API_URL: settings.llmApiUrl,
+    SAT_SIM_LLM_API_URL: settings.activeAiMode === "llm" ? settings.llmApiUrl : "",
     SAT_SIM_LLM_MODEL: settings.llmModel,
-    SAT_SIM_LLM_API_KEY: settings.llmApiKey,
-    SAT_SIM_YOLO_API_URL: settings.yoloApiUrl,
+    SAT_SIM_LLM_API_KEY: settings.activeAiMode === "llm" ? settings.llmApiKey : "",
+    SAT_SIM_YOLO_API_URL: settings.activeAiMode === "yolo" ? settings.yoloApiUrl : "",
     SAT_SIM_YOLO_MODEL: settings.yoloModel,
-    SAT_SIM_YOLO_API_KEY: settings.yoloApiKey,
+    SAT_SIM_YOLO_API_KEY: settings.activeAiMode === "yolo" ? settings.yoloApiKey : "",
     SAT_SIM_PROVIDER_TIMEOUT_SECONDS: String(settings.providerTimeoutSeconds),
   };
 }
@@ -250,7 +250,21 @@ function diagnostics() {
   };
 }
 
+function registerExternalHandler() {
+  // This is deliberately replaced on every bootstrap: it allows a reopened
+  // macOS window to use the current preload bridge even after dev reloads.
+  ipcMain.removeHandler("desktop:open-external");
+  ipcMain.handle("desktop:open-external", (_event, rawUrl) => {
+    const url = new URL(String(rawUrl));
+    if (url.protocol !== "https:" || url.hostname !== "www.spacezenith.ai") {
+      throw new Error("External URL is not allowed");
+    }
+    return shell.openExternal(url.toString());
+  });
+}
+
 function registerIpc() {
+  registerExternalHandler();
   // macOS may invoke bootstrap again after all windows are closed and the app
   // is reactivated. IPC handlers belong to the process, not a window, so they
   // must only be registered once.
@@ -261,7 +275,7 @@ function registerIpc() {
   ipcMain.handle("desktop:settings:save", async (_event, value) => {
     const prior = settings;
     const saved = await saveSettings(value);
-    const providerChanged = ["llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
+    const providerChanged = ["activeAiMode", "llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
     if (providerChanged) {
       await stopProcess("gpu");
       startService("gpu", runtime.ports.gpu);

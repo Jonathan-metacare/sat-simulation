@@ -113,3 +113,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 :root[data-theme="light"] .mission-drawer .text-emerald-200\/80 { color:#08764d !important; opacity:1 !important; }
 :root[data-theme="light"] .mission-drawer .text-cyan-100 { color:#07536b !important; }
 :root[data-theme="light"] .text-cyan-300\/60 { color:#08718b !important; opacity:1 !important; }
+
+/* The settings menu needs a clearly visible hover state in either theme. */
+:root[data-theme="light"] .settings-menu-item:hover { background:rgba(8,145,178,.22) !important; color:#062f40 !important; }

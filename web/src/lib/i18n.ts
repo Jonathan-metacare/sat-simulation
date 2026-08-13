@@ -102,7 +102,7 @@ const dictionary = {
     "ground.onboardCatalog": "星上目录 · 尚未下传",
     "ground.onboardOnly": "仅星务可访问",
     "ground.truncated": "模型输出达到长度上限，报告可能不完整。",
-    "link.ready": "LINK READY",
+    "link.ready": "连接正常",
     "link.bandwidth": "带宽",
     "link.latency": "单向延迟",
     "theme.light": "亮色",

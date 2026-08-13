@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld("satSimDesktop", {
   restartStack: () => ipcRenderer.invoke("desktop:stack:restart"),
   openDataDirectory: () => ipcRenderer.invoke("desktop:open-data-directory"),
   openLogDirectory: () => ipcRenderer.invoke("desktop:open-log-directory"),
+  openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
 });

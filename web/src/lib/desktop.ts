@@ -30,6 +30,7 @@ export type DesktopBridge = {
   restartStack(): Promise<DesktopDiagnostics>;
   openDataDirectory(): Promise<string>;
   openLogDirectory(): Promise<string>;
+  openExternal(url: string): Promise<void>;
 };
 
 declare global {

@@ -5,8 +5,8 @@ import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Activity, ActivitySquare, AlertTriangle, Clock3, Database, FileImage, Gauge,
-  ChevronDown, LoaderCircle, Orbit, Radio, Settings2, StepForward, Zap
+  Activity, AlertTriangle, Clock3, Database, FileImage, Gauge,
+  ChevronDown, LoaderCircle, Orbit, PanelRightClose, PanelRightOpen, Radio, Settings2, StepForward, Zap
 } from "lucide-react";
 
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
@@ -93,6 +93,7 @@ export function MissionDashboard() {
   const [desktopSettingsOpen, setDesktopSettingsOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"general" | "plugins" | "ai" | "scene" | "about">("general");
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
   const missionId = mission?.command.id;
   const runId = mission?.command.run_id;
   const scenarioId = scenario?.config.id;
@@ -116,6 +117,14 @@ export function MissionDashboard() {
     if (savedLocale === "zh" || savedLocale === "en") setLocale(savedLocale);
     if (savedTheme === "dark" || savedTheme === "light") setTheme(savedTheme);
   }, [setLocale, setTheme]);
+  useEffect(() => {
+    if (!settingsMenuOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!settingsMenuRef.current?.contains(event.target as Node)) setSettingsMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [settingsMenuOpen]);
   useEffect(() => {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
     window.localStorage.setItem("sat-sim-locale", locale);
@@ -285,10 +294,10 @@ export function MissionDashboard() {
           <h1 className="text-2xl font-semibold tracking-tight text-slate-50 lg:text-3xl">{t("app.title")}</h1>
           <p className="mt-1 text-xs text-slate-500">{t("app.subtitle")}</p>
         </div>
-        <div className="relative flex flex-wrap items-center gap-2">
+        <div ref={settingsMenuRef} className="relative flex flex-wrap items-center gap-2">
           <Button onClick={() => setSettingsMenuOpen((open) => !open)} active={settingsMenuOpen}><Settings2 size={14} /><ChevronDown size={13} /></Button>
-          {settingsMenuOpen && <div className="absolute right-0 top-10 z-[55] min-w-40 rounded-xl border border-cyan-200/15 bg-slate-950/95 p-1.5 shadow-xl shadow-black/50 backdrop-blur"><button onClick={() => openSettings("general")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "通用" : "General"}</button><button onClick={() => openSettings("plugins")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "插件与密钥" : "Plugins & Keys"}</button><button onClick={() => openSettings("ai")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">AI</button><button onClick={() => openSettings("scene")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "场景导入" : "Scene Import"}</button><button onClick={() => openSettings("about")} className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-cyan-300/10 hover:text-cyan-100">{locale === "zh" ? "关于" : "About"}</button></div>}
-          <Button onClick={() => setMissionPanelOpen((open) => !open)} active><ActivitySquare size={14} /></Button>
+          {settingsMenuOpen && <div className="absolute right-0 top-10 z-[55] min-w-44 rounded-xl border border-cyan-200/25 bg-slate-950/95 p-1.5 shadow-xl shadow-black/50 backdrop-blur"><button onClick={() => openSettings("general")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "通用" : "General"}</button><button onClick={() => openSettings("plugins")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "插件与密钥" : "Plugins & Keys"}</button><button onClick={() => openSettings("ai")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">AI</button><button onClick={() => openSettings("scene")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "场景导入" : "Scene Import"}</button><button onClick={() => openSettings("about")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "关于" : "About"}</button></div>}
+          <Button onClick={() => { setSettingsMenuOpen(false); setMissionPanelOpen((open) => !open); }} active={missionPanelOpen}>{missionPanelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</Button>
         </div>
       </header>
 
@@ -434,5 +443,5 @@ function PanelHeader({ icon, title, note }: { icon: React.ReactNode; title: stri
 function Metric({ label, value, good }: { label: string; value: string; good?: boolean }) { return <div className="rounded-lg border border-white/[.055] bg-black/15 px-3 py-2"><div className="text-[9px] tracking-wider text-slate-600 uppercase">{label}</div><div className={`mt-1 font-mono text-xs ${good ? "text-emerald-300" : "text-slate-200"}`}>{value}</div></div>; }
 function Empty({ text }: { text: string }) { return <div className="py-8 text-center text-xs text-slate-600">{text}</div>; }
 function Stage({ label, complete, active, last }: { label: string; complete: boolean; active: boolean; last: boolean }) { return <div className="relative flex flex-1 flex-col items-center text-center"><div className={`relative z-10 size-3 rounded-full border ${active ? "border-cyan-100 bg-cyan-300 shadow-[0_0_14px_#51e5ff]" : complete ? "border-emerald-300 bg-emerald-400" : "border-slate-600 bg-slate-900"}`} />{!last && <div className={`absolute left-1/2 top-[5px] h-px w-full ${complete ? "bg-emerald-400/60" : "bg-slate-700"}`} />}<span className={`mt-3 text-[10px] ${active ? "text-cyan-100" : complete ? "text-emerald-200/80" : "text-slate-600"}`}>{label}</span></div>; }
-function LinkCard({ title, rate = 0, latency = 0, accent, locale }: { title: string; rate?: number; latency?: number; accent: "cyan" | "orange"; locale: Parameters<typeof translate>[0] }) { return <div className="rounded-xl border border-white/[.055] bg-black/15 p-3"><div className="mb-2 flex items-center justify-between text-xs"><span className="text-slate-300">{title}</span><span className={accent === "orange" ? "text-orange-300" : "text-cyan-300"}>{translate(locale, "link.ready")}</span></div><div className="grid grid-cols-2 gap-2"><Metric label={translate(locale, "link.bandwidth")} value={rate >= 1e9 ? `${(rate / 1e9).toFixed(1)} Gbps` : `${(rate / 1e6).toFixed(0)} Mbps`} /><Metric label={translate(locale, "link.latency")} value={`${latency} ms`} /></div></div>; }
+function LinkCard({ title, rate = 0, latency = 0, accent, locale }: { title: string; rate?: number; latency?: number; accent: "cyan" | "orange"; locale: Parameters<typeof translate>[0] }) { return <div className="rounded-xl border border-white/[.055] bg-black/15 p-3"><div className="mb-2 flex items-center justify-between text-xs"><span className="text-slate-300">{title}</span><span className="text-cyan-300">{translate(locale, "link.ready")}</span></div><div className="grid grid-cols-2 gap-2"><Metric label={translate(locale, "link.bandwidth")} value={rate >= 1e9 ? `${(rate / 1e9).toFixed(1)} Gbps` : `${(rate / 1e6).toFixed(0)} Mbps`} /><Metric label={translate(locale, "link.latency")} value={`${latency} ms`} /></div></div>; }
 function ProductCard({ product }: { product: ProductManifest }) { return <a href={artifactURL(product.id)} target="_blank" rel="noreferrer" className="rounded-xl border border-white/[.06] bg-black/15 p-3 transition hover:border-cyan-300/25"><div className="mb-2 flex items-center justify-between"><span className="rounded bg-cyan-300/10 px-2 py-1 text-[10px] font-semibold text-cyan-200">{product.level.toUpperCase()}</span><span className="text-[10px] text-slate-600">{formatBytes(product.size_bytes)}</span></div><div className="truncate text-xs text-slate-300">{product.name}</div><div className="mt-2 truncate font-mono text-[9px] text-slate-600">SHA {product.sha256.slice(0, 16)}…</div></a>; }
