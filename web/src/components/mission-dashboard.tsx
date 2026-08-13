@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Activity, ActivitySquare, AlertTriangle, Clock3, Database, FileImage, Gauge,
-  Languages, LoaderCircle, Moon, Orbit, Radio, Settings2, StepForward, Sun, X, Zap
+  Languages, LoaderCircle, Moon, Orbit, Radio, Settings2, StepForward, Sun, Zap
 } from "lucide-react";
 
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
@@ -247,7 +247,7 @@ export function MissionDashboard() {
           <Button onClick={() => setLocale(locale === "zh" ? "en" : "zh")}><Languages size={14} />{locale === "zh" ? t("locale.en") : t("locale.zh")}</Button>
           <Button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}{theme === "dark" ? t("theme.light") : t("theme.dark")}</Button>
           {desktopAvailable && <Button onClick={() => setDesktopSettingsOpen(true)}><Settings2 size={14} />{locale === "zh" ? "桌面设置" : "Desktop Settings"}</Button>}
-          <Button onClick={() => setMissionPanelOpen(true)} active><ActivitySquare size={14} />{t("actions.missionPanel")}</Button>
+          <Button onClick={() => setMissionPanelOpen((open) => !open)} active><ActivitySquare size={14} />{t("actions.missionPanel")}</Button>
         </div>
       </header>
 
@@ -257,7 +257,6 @@ export function MissionDashboard() {
       <aside aria-label="任务控制面板" className={`mission-drawer fixed inset-y-0 right-0 z-50 flex w-full max-w-none flex-col border-l border-cyan-300/20 bg-[#041521]/[.98] shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex items-center justify-between border-b border-cyan-200/10 px-5 py-4">
           <div><div className="text-sm font-medium text-cyan-100">{t("panel.title")}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{t("panel.subtitle")}</div></div>
-          <Button onClick={() => setMissionPanelOpen(false)}><X size={15} /></Button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <section className="panel mb-4 rounded-2xl p-2"><SystemTopology onNavigate={(node) => { navigateTab(node); setMissionPanelOpen(false); }} mission={mission ? {
