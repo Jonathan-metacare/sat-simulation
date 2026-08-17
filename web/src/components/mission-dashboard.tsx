@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Activity, AlertTriangle, Clock3, Database, FileImage, Gauge,
-  ChevronDown, LoaderCircle, Orbit, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Radio, Settings2, StepForward, Zap
+  ListTodo, LoaderCircle, Orbit, Radio, Settings2, StepForward, Zap
 } from "lucide-react";
 
 import { api, artifactURL, eventStreamURL } from "~/lib/api";
@@ -87,10 +87,9 @@ export function MissionDashboard() {
   const [projectContext, setProjectContext] = useState("SpaceZenith-Sim 光学观测任务");
   const [analysisPrompt, setAnalysisPrompt] = useState("识别图像中的主要地物、目标和异常，说明判断依据与不确定性。");
   const [missionResult, setMissionResult] = useState<MissionResultResponse>();
-  const [playbackSpeed, setPlaybackSpeed] = useState<1 | 2 | 5>(1);
+  const [playbackSpeed] = useState<1 | 2 | 5>(1);
   const [activeTab, setActiveTab] = useState<NodeKind>("ground");
-  const [missionListOpen, setMissionListOpen] = useState(false);
-  const [missionPanelOpen, setMissionPanelOpen] = useState(false);
+  const [activeSidebar, setActiveSidebar] = useState<"mission" | "protocol" | "tasks">();
   const [missionScope, setMissionScope] = useState<"all" | "active">("all");
   const [missionSummaries, setMissionSummaries] = useState<MissionSummary[]>([]);
   const [scenarioRecords, setScenarioRecords] = useState<ScenarioRecord[]>([]);
@@ -354,7 +353,7 @@ export function MissionDashboard() {
       const sourceScenario = scenarioRecords.find((item) => item.config.id === detail.command.scenario_id);
       if (sourceScenario) setOrbit(await api.orbit(sourceScenario.config.id));
       else setOrbit(undefined);
-      setMissionListOpen(false);
+      setActiveSidebar(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "任务加载失败");
     } finally {
@@ -368,22 +367,63 @@ export function MissionDashboard() {
 
   if (loading) return <div className="flex min-h-screen items-center justify-center text-cyan-200"><LoaderCircle className="mr-2 animate-spin" />{locale === "zh" ? "正在建立仿真控制面..." : "Starting simulation control plane..."}</div>;
 
-  return (
-    <main className={`mission-content grid-scan min-h-screen p-4 lg:p-6 ${missionListOpen ? "mission-content--task-list-open" : ""} ${missionPanelOpen ? "mission-content--drawer-open" : ""}`}>
+  const sidebarOpen = Boolean(activeSidebar);
+  const toggleSidebar = (view: "mission" | "protocol" | "tasks") => {
+    setSettingsMenuOpen(false);
+    setActiveSidebar((current) => current === view ? undefined : view);
+  };
+  const topologyMission = mission ? {
+    phase: mission.phase,
+    executionState: mission.execution_state,
+    activeSubstage: mission.active_substage,
+    aiMode: mission.ai_mode,
+    providerStatus: mission.ai_mode === "llm"
+      ? providerHealth.language?.status
+      : providerHealth.detection?.status,
+  } : undefined;
+
+  return <div className="workspace-shell">
+    <aside className="activity-bar z-[60] flex w-16 flex-col items-center border-r border-cyan-200/15 py-3 shadow-xl shadow-black/20" aria-label={locale === "zh" ? "功能栏" : "Activity bar"}>
+      <button type="button" title={locale === "zh" ? "任务控制" : "Mission Control"} aria-label={locale === "zh" ? "任务控制" : "Mission Control"} onClick={() => toggleSidebar("mission")} className={`activity-bar-button ${activeSidebar === "mission" ? "activity-bar-button--active" : ""}`}><Activity size={22} /></button>
+      <button type="button" title={locale === "zh" ? "协议观察器" : "Protocol Observer"} aria-label={locale === "zh" ? "协议观察器" : "Protocol Observer"} onClick={() => toggleSidebar("protocol")} className={`activity-bar-button ${activeSidebar === "protocol" ? "activity-bar-button--active" : ""}`}><Radio size={22} /></button>
+      <button type="button" title={locale === "zh" ? "任务列表" : "Task List"} aria-label={locale === "zh" ? "任务列表" : "Task List"} onClick={() => toggleSidebar("tasks")} className={`activity-bar-button ${activeSidebar === "tasks" ? "activity-bar-button--active" : ""}`}><ListTodo size={22} /></button>
+      <div ref={settingsMenuRef} className="relative mt-auto">
+        <button type="button" title={locale === "zh" ? "设置" : "Settings"} aria-label={locale === "zh" ? "设置" : "Settings"} onClick={() => { setActiveSidebar(undefined); setSettingsMenuOpen((open) => !open); }} className={`activity-bar-button ${settingsMenuOpen ? "activity-bar-button--active" : ""}`}><Settings2 size={22} /></button>
+        {settingsMenuOpen && <div className="settings-activity-menu absolute bottom-0 left-14 z-[70] min-w-44 rounded-xl border border-cyan-200/25 bg-slate-950/95 p-1.5 shadow-xl shadow-black/50 backdrop-blur"><button onClick={() => openSettings("general")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "通用" : "General"}</button><button onClick={() => openSettings("plugins")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "插件与密钥" : "Plugins & Keys"}</button><button onClick={() => openSettings("ai")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">AI</button><button onClick={() => openSettings("scene")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "场景导入" : "Scene Import"}</button><button onClick={() => openSettings("about")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "关于" : "About"}</button></div>}
+      </div>
+    </aside>
+    {sidebarOpen && <aside aria-label={activeSidebar === "protocol" ? (locale === "zh" ? "协议观察器" : "Protocol Observer") : activeSidebar === "tasks" ? (locale === "zh" ? "任务列表" : "Task List") : (locale === "zh" ? "任务控制" : "Mission Control")} className="workspace-sidebar z-50 flex max-w-none flex-col border-r border-cyan-300/20 shadow-2xl shadow-black/50">
+      {activeSidebar === "tasks" ? <>
+        <div className="border-b border-cyan-200/10 px-5 py-4"><div className="text-sm font-medium text-cyan-100">{locale === "zh" ? "任务列表" : "Task List"}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{locale === "zh" ? "任务导航与历史查看" : "Mission navigation and history"}</div></div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="mb-4 grid grid-cols-2 rounded-xl border border-white/[.06] bg-black/15 p-1"><button onClick={() => setMissionScope("all")} className={`rounded-lg px-3 py-2 text-xs transition ${missionScope === "all" ? "bg-cyan-300/15 text-cyan-100" : "text-slate-500 hover:text-slate-300"}`}>{locale === "zh" ? "全部任务" : "All missions"}</button><button onClick={() => setMissionScope("active")} className={`rounded-lg px-3 py-2 text-xs transition ${missionScope === "active" ? "bg-cyan-300/15 text-cyan-100" : "text-slate-500 hover:text-slate-300"}`}>{locale === "zh" ? "当前场景" : "Active scene"}</button></div>
+          <p className="mb-3 text-[11px] leading-5 text-slate-500">{locale === "zh" ? "选择历史任务后仅可查看，不能继续单步推进。" : "Selected historical missions are view-only and cannot be advanced."}</p>
+          <div className="space-y-2">{filteredMissionSummaries.map((item) => { const sourceScenario = scenarioRecords.find((entry) => entry.config.id === item.command.scenario_id); const selected = item.command.id === mission?.command.id; const issue = item.block_reason ?? item.error; return <button key={item.command.id} onClick={() => void selectHistoricalMission(item)} disabled={working} className={`w-full rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${selected ? "border-cyan-300/55 bg-cyan-300/12 shadow-[inset_0_0_0_1px_rgba(81,229,255,.12)]" : "border-white/[.07] bg-black/15 hover:border-cyan-300/30 hover:bg-cyan-300/[.05]"}`}><div className="flex items-start justify-between gap-3"><span className="line-clamp-2 text-xs font-medium text-slate-200">{item.command.name}</span><span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] ${item.execution_state === "completed" ? "border-emerald-300/25 text-emerald-300" : item.execution_state === "blocked" || item.execution_state === "retryable_error" ? "border-orange-300/25 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{item.execution_state}</span></div><div className="mt-2 text-[10px] text-slate-500">{sourceScenario?.config.name ?? item.command.scenario_id}</div><div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-slate-600"><span>{t(`stage.${item.phase}` as Parameters<typeof t>[0])}</span><span>{item.ai_mode.toUpperCase()}</span><span>{new Date(item.created_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })}</span></div>{issue && <div className="mt-2 line-clamp-2 text-[10px] leading-4 text-orange-300">{issue}</div>}</button>; })}{!filteredMissionSummaries.length && <Empty text={locale === "zh" ? "没有符合条件的任务" : "No matching missions"} />}</div>
+        </div>
+      </> : activeSidebar === "protocol" ? <>
+        <div className="border-b border-cyan-200/10 px-5 py-4"><div className="text-sm font-medium text-cyan-100">{locale === "zh" ? "协议观察器" : "Protocol Observer"}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{locale === "zh" ? "事务、解码正文与 SIMF 帧" : "Transactions, decoded payloads, and SIMF frames"}</div></div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4"><ProtocolInspector missionId={mission?.command.id} runId={mission?.command.run_id} locale={locale} /></div>
+      </> : <>
+        <div className="border-b border-cyan-200/10 px-5 py-4"><div className="text-sm font-medium text-cyan-100">{locale === "zh" ? "任务控制" : "Mission Control"}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{locale === "zh" ? "时钟、推进、窗口和事件" : "Clock, advancing, windows, and events"}</div></div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4"><section className="panel rounded-2xl p-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/[.06] pb-4"><div className="flex flex-wrap items-center gap-3"><Title icon={<Clock3 size={16} />} text={t("controls.mission")} /><span className="font-mono text-xs text-cyan-100">{viewedScenario ? new Date(viewedScenario.clock.simulated_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false }) : "--"}</span><span className={`rounded border px-2 py-1 text-[10px] ${viewedScenario?.clock.paused ? "border-emerald-300/20 text-emerald-300" : "border-orange-300/20 text-orange-300"}`}>{viewedScenario?.clock.paused ? t("controls.paused") : t("controls.running")}</span></div><div className="flex flex-wrap items-center gap-2"><Button onClick={() => setCreateOpen(true)} disabled={!scenario || (!historyView && mission?.execution_state === "running")}><Zap size={14} />{t("actions.newMission")}</Button><Button onClick={advanceMission} active disabled={historyView || !mission?.can_advance || mission?.execution_state === "running" || working}>{mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}{historyView ? historyReadOnlyLabel : mission?.execution_state === "running" ? t("controls.stageRunning") : advanceLabel}</Button></div></div>
+          {historyView && <div className="mb-4 rounded-lg border border-orange-300/25 bg-orange-300/[.06] px-3 py-2 text-xs text-orange-200">{historyReadOnlyLabel}</div>}
+          <div className="mb-4 flex items-center justify-between gap-3"><Title icon={<Activity size={16} />} text={t("mission.timeline")} /><span className={`rounded-full border px-2.5 py-1 text-[10px] ${mission?.execution_state === "blocked" ? "border-orange-400/30 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{mission ? `${mission.phase} · ${mission.execution_state}` : t("mission.waiting")}</span></div>
+          <div className="overflow-x-auto pb-2"><div className="flex min-w-[700px] items-start">{stages.map(([key, label], index) => <Stage key={key} label={t(label)} complete={mission?.phase === "completed" || index < stageIndex} active={key === mission?.phase} last={index === stages.length - 1} />)}</div></div>
+          {mission?.planned_windows && <div className="mt-4 grid gap-2 border-t border-white/[.05] pt-4 sm:grid-cols-3"><Metric label={t("mission.uplinkAos")} value={new Date(mission.planned_windows.uplink.aos).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })} /><Metric label={t("mission.captureAt")} value={new Date(mission.planned_windows.capture.max_elevation_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })} /><Metric label={t("mission.downlinkAos")} value={new Date(mission.planned_windows.downlink.aos).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })} /></div>}
+          {mission?.execution_state === "blocked" && <p className="mt-3 text-xs leading-5 text-orange-200">{mission.block_reason}</p>}{mission?.execution_state === "retryable_error" && <p className="mt-3 text-xs leading-5 text-red-300">{locale === "zh" ? "可重试：" : "Retryable: "}{mission.error}</p>}
+          <div ref={eventListRef} className="mt-4 max-h-56 space-y-2 overflow-auto border-t border-white/[.05] pt-4">{visibleEvents.length ? [...visibleEvents].reverse().map((event) => <div key={event.id} className={`grid grid-cols-[72px_1fr] gap-3 rounded-lg px-2 py-1.5 text-xs ${["macro_phase_blocked", "macro_phase_failed"].includes(event.event_type) ? "bg-orange-400/[.06]" : ""}`}><span className="font-mono text-slate-600">{new Date(event.simulated_at).toLocaleTimeString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })}</span><div><div className="text-slate-300">{localizedEventMessage(t, event)}</div><div className="mt-0.5 text-[10px] text-slate-600">{event.source} · {event.channel} · {event.event_type}</div></div></div>) : <Empty text={t("mission.events.empty")} />}</div>
+        </section></div>
+      </>}
+    </aside>}
+    <main className="mission-content grid-scan min-h-screen p-4 lg:p-6">
       <header className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b border-cyan-200/10 pb-5">
         <div>
           <div className="mb-2 flex items-center gap-2 text-[10px] tracking-[.34em] text-cyan-300/60 uppercase"><Orbit size={13} />Satellite Onboard AI · SIL</div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-50 lg:text-3xl">{t("app.title")}</h1>
           <p className="mt-1 text-xs text-slate-500">{t("app.subtitle")}</p>
         </div>
-        <div ref={settingsMenuRef} className="relative flex flex-wrap items-center gap-2">
-          <Button onClick={() => setSettingsMenuOpen((open) => !open)} active={settingsMenuOpen}><Settings2 size={14} /><ChevronDown size={13} /></Button>
-          {settingsMenuOpen && <div className="absolute right-0 top-10 z-[55] min-w-44 rounded-xl border border-cyan-200/25 bg-slate-950/95 p-1.5 shadow-xl shadow-black/50 backdrop-blur"><button onClick={() => openSettings("general")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "通用" : "General"}</button><button onClick={() => openSettings("plugins")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "插件与密钥" : "Plugins & Keys"}</button><button onClick={() => openSettings("ai")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">AI</button><button onClick={() => openSettings("scene")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "场景导入" : "Scene Import"}</button><button onClick={() => openSettings("about")} className="settings-menu-item w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-200 transition hover:bg-cyan-300/25 hover:text-cyan-50">{locale === "zh" ? "关于" : "About"}</button></div>}
-          <Button onClick={() => { setSettingsMenuOpen(false); setMissionPanelOpen(false); setMissionListOpen((open) => !open); }} active={missionListOpen}>{missionListOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</Button>
-          <Button onClick={() => { setSettingsMenuOpen(false); setMissionListOpen(false); setMissionPanelOpen((open) => !open); }} active={missionPanelOpen}>{missionPanelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</Button>
-        </div>
       </header>
-
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
       <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} onAiMode={setAiMode} initialSection={settingsSection} onScenarioImported={() => void reload()} onSettingsSaved={() => void reload()} activeScenarioId={scenario?.config.id} onScenarioSelected={(selected) => {
@@ -412,82 +452,10 @@ export function MissionDashboard() {
           }
         })();
       }} />
-      <aside aria-label={locale === "zh" ? "任务列表" : "Mission list"} className={`task-list-drawer fixed inset-y-0 left-0 z-50 flex w-full max-w-none flex-col border-r border-cyan-300/20 shadow-2xl shadow-black/50 transition-transform duration-300 ${missionListOpen ? "translate-x-0" : "-translate-x-full"}`}>
-        <div className="border-b border-cyan-200/10 px-5 py-4">
-          <div className="text-sm font-medium text-cyan-100">{locale === "zh" ? "任务列表" : "Mission list"}</div>
-          <div className="mt-1 text-[10px] tracking-wider text-slate-500">{locale === "zh" ? "任务导航与历史查看" : "Mission navigation and history"}</div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="mb-4 grid grid-cols-2 rounded-xl border border-white/[.06] bg-black/15 p-1">
-            <button onClick={() => setMissionScope("all")} className={`rounded-lg px-3 py-2 text-xs transition ${missionScope === "all" ? "bg-cyan-300/15 text-cyan-100" : "text-slate-500 hover:text-slate-300"}`}>{locale === "zh" ? "全部任务" : "All missions"}</button>
-            <button onClick={() => setMissionScope("active")} className={`rounded-lg px-3 py-2 text-xs transition ${missionScope === "active" ? "bg-cyan-300/15 text-cyan-100" : "text-slate-500 hover:text-slate-300"}`}>{locale === "zh" ? "当前场景" : "Active scene"}</button>
-          </div>
-          <p className="mb-3 text-[11px] leading-5 text-slate-500">{locale === "zh" ? "选择历史任务后仅可查看，不能继续单步推进。" : "Selected historical missions are view-only and cannot be advanced."}</p>
-          <div className="space-y-2">
-            {filteredMissionSummaries.map((item) => {
-              const sourceScenario = scenarioRecords.find((entry) => entry.config.id === item.command.scenario_id);
-              const selected = item.command.id === mission?.command.id;
-              const issue = item.block_reason ?? item.error;
-              return <button key={item.command.id} onClick={() => void selectHistoricalMission(item)} disabled={working} className={`w-full rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${selected ? "border-cyan-300/55 bg-cyan-300/12 shadow-[inset_0_0_0_1px_rgba(81,229,255,.12)]" : "border-white/[.07] bg-black/15 hover:border-cyan-300/30 hover:bg-cyan-300/[.05]"}`}>
-                <div className="flex items-start justify-between gap-3"><span className="line-clamp-2 text-xs font-medium text-slate-200">{item.command.name}</span><span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] ${item.execution_state === "completed" ? "border-emerald-300/25 text-emerald-300" : item.execution_state === "blocked" || item.execution_state === "retryable_error" ? "border-orange-300/25 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{item.execution_state}</span></div>
-                <div className="mt-2 text-[10px] text-slate-500">{sourceScenario?.config.name ?? item.command.scenario_id}</div>
-                <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-slate-600"><span>{t(`stage.${item.phase}` as Parameters<typeof t>[0])}</span><span>{item.ai_mode.toUpperCase()}</span><span>{new Date(item.created_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })}</span></div>
-                {issue && <div className="mt-2 line-clamp-2 text-[10px] leading-4 text-orange-300">{issue}</div>}
-              </button>;
-            })}
-            {!filteredMissionSummaries.length && <Empty text={locale === "zh" ? "没有符合条件的任务" : "No matching missions"} />}
-          </div>
-        </div>
-      </aside>
-      <aside aria-label="任务控制面板" className={`mission-drawer fixed inset-y-0 right-0 z-50 flex w-full max-w-none flex-col border-l border-cyan-300/20 shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
-        <div className="flex items-center justify-between border-b border-cyan-200/10 px-5 py-4">
-          <div><div className="text-sm font-medium text-cyan-100">{t("panel.title")}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{t("panel.subtitle")}</div></div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <section className="panel mb-4 rounded-2xl p-2"><SystemTopology onNavigate={(node) => { navigateTab(node); setMissionPanelOpen(false); }} mission={mission ? {
-            phase: mission.phase,
-            executionState: mission.execution_state,
-            activeSubstage: mission.active_substage,
-            aiMode: mission.ai_mode,
-            providerStatus: mission.ai_mode === "llm"
-              ? providerHealth.language?.status
-              : providerHealth.detection?.status,
-          } : undefined} locale={locale} /></section>
 
-          <section className="panel mb-4 rounded-2xl p-4">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/[.06] pb-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <Title icon={<Clock3 size={16} />} text={t("controls.mission")} />
-                <span className="font-mono text-xs text-cyan-100">{viewedScenario ? new Date(viewedScenario.clock.simulated_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false }) : "--"}</span>
-                <span className={`rounded border px-2 py-1 text-[10px] ${viewedScenario?.clock.paused ? "border-emerald-300/20 text-emerald-300" : "border-orange-300/20 text-orange-300"}`}>{viewedScenario?.clock.paused ? t("controls.paused") : t("controls.running")}</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {/* {([1, 2, 5] as const).map((rate) => <Button key={rate} onClick={() => setPlaybackSpeed(rate)} active={playbackSpeed === rate}>{rate}x</Button>)} */}
-                <Button onClick={() => setCreateOpen(true)} disabled={!scenario || (!historyView && mission?.execution_state === "running")}><Zap size={14} />{t("actions.newMission")}</Button>
-                <Button onClick={advanceMission} active disabled={historyView || !mission?.can_advance || mission?.execution_state === "running" || working}>
-                  {mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}
-                  {historyView ? historyReadOnlyLabel : mission?.execution_state === "running" ? t("controls.stageRunning") : advanceLabel}
-                </Button>
-              </div>
-            </div>
-            {historyView && <div className="mb-4 rounded-lg border border-orange-300/25 bg-orange-300/[.06] px-3 py-2 text-xs text-orange-200">{historyReadOnlyLabel}</div>}
-            <div className="mb-4 flex items-center justify-between gap-3"><Title icon={<Activity size={16} />} text={t("mission.timeline")} /><span className={`rounded-full border px-2.5 py-1 text-[10px] ${mission?.execution_state === "blocked" ? "border-orange-400/30 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{mission ? `${mission.phase} · ${mission.execution_state}` : t("mission.waiting")}</span></div>
-            <div className="overflow-x-auto pb-2"><div className="flex min-w-[700px] items-start">{stages.map(([key, label], index) => <Stage key={key} label={t(label)} complete={mission?.phase === "completed" || index < stageIndex} active={key === mission?.phase} last={index === stages.length - 1} />)}</div></div>
-            {mission?.planned_windows && <div className="mt-4 grid gap-2 border-t border-white/[.05] pt-4 sm:grid-cols-3">
-              <Metric label={t("mission.uplinkAos")} value={new Date(mission.planned_windows.uplink.aos).toLocaleString("zh-CN", { hour12: false })} />
-              <Metric label={t("mission.captureAt")} value={new Date(mission.planned_windows.capture.max_elevation_at).toLocaleString("zh-CN", { hour12: false })} />
-              <Metric label={t("mission.downlinkAos")} value={new Date(mission.planned_windows.downlink.aos).toLocaleString("zh-CN", { hour12: false })} />
-            </div>}
-            {mission?.execution_state === "blocked" && <p className="mt-3 text-xs leading-5 text-orange-200">{mission.block_reason}</p>}
-            {mission?.execution_state === "retryable_error" && <p className="mt-3 text-xs leading-5 text-red-300">可重试：{mission.error}</p>}
-            <div ref={eventListRef} className="mt-4 max-h-56 space-y-2 overflow-auto border-t border-white/[.05] pt-4">
-              {visibleEvents.length ? [...visibleEvents].reverse().map((event) => <div key={event.id} className={`grid grid-cols-[72px_1fr] gap-3 rounded-lg px-2 py-1.5 text-xs ${["macro_phase_blocked", "macro_phase_failed"].includes(event.event_type) ? "bg-orange-400/[.06]" : ""}`}><span className="font-mono text-slate-600">{new Date(event.simulated_at).toLocaleTimeString("zh-CN", { hour12: false })}</span><div><div className="text-slate-300">{localizedEventMessage(t, event)}</div><div className="mt-0.5 text-[10px] text-slate-600">{event.source} · {event.channel} · {event.event_type}</div></div></div>) : <Empty text={t("mission.events.empty")} />}
-            </div>
-          </section>
-          <ProtocolInspector missionId={mission?.command.id} runId={mission?.command.run_id} locale={locale} />
-        </div>
-      </aside>
-
+      <section className="panel mb-4 rounded-2xl p-2">
+        <SystemTopology onNavigate={navigateTab} mission={topologyMission} locale={locale} />
+      </section>
       <nav className="panel mb-4 flex overflow-x-auto rounded-2xl p-1.5" aria-label="节点页面">
         {(["ground", "platform", "optical", "gpu"] as NodeKind[]).map((tab) => <button key={tab} onClick={() => navigateTab(tab)} className={`min-w-32 flex-1 rounded-xl px-4 py-3 text-xs transition ${activeTab === tab ? "bg-cyan-300/12 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(81,229,255,.25)]" : "text-slate-500 hover:bg-white/[.035] hover:text-slate-300"}`}>{t(`tabs.${tab}` as Parameters<typeof t>[0])}</button>)}
       </nav>
@@ -556,22 +524,18 @@ export function MissionDashboard() {
           </div>
         </section>
 
-        {createOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-          <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
-            <div className="mb-1 text-lg font-medium text-slate-50">{t("mission.createTitle")}</div>
-            <p className="mb-5 text-xs leading-5 text-slate-500">{mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("mission.createReplaceDesc") : t("mission.createDesc")}</p>
-            <div className="mb-5 rounded-xl border border-cyan-300/20 bg-cyan-300/[.06] p-3 text-xs text-slate-300">{locale === "zh" ? `本任务将使用设置中选择的 ${aiMode.toUpperCase()}。可在 设置 → AI 中切换。` : `This mission will use ${aiMode.toUpperCase()} selected in Settings → AI.`}</div>
-            {aiMode === "llm" && <div className="mb-5 space-y-3">
-              <label className="block text-xs text-slate-400">{t("mission.projectContext")}<textarea value={projectContext} onChange={(event) => setProjectContext(event.target.value)} maxLength={4000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.projectPlaceholder")} /></label>
-              <label className="block text-xs text-slate-400">{t("mission.analysisPrompt")}<textarea value={analysisPrompt} onChange={(event) => setAnalysisPrompt(event.target.value)} maxLength={2000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.promptPlaceholder")} /></label>
-              <p className="text-[10px] leading-4 text-slate-600">{t("mission.llmNotice")}</p>
-            </div>}
-            <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>{t("actions.cancel")}</Button><Button onClick={createMission} active disabled={working}>{working ? t("actions.initRunning") : mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("actions.endAndCreate") : t("actions.initMission")}</Button></div>
-          </div>
-        </div>}
       </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} activeAiMode={aiMode} gtxLink={config?.links.gtx} locale={locale} />}
+      {createOpen && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+        <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
+          <div className="mb-1 text-lg font-medium text-slate-50">{t("mission.createTitle")}</div>
+          <p className="mb-5 text-xs leading-5 text-slate-500">{mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("mission.createReplaceDesc") : t("mission.createDesc")}</p>
+          <div className="mb-5 rounded-xl border border-cyan-300/20 bg-cyan-300/[.06] p-3 text-xs text-slate-300">{locale === "zh" ? `本任务将使用设置中选择的 ${aiMode.toUpperCase()}。可在 设置 → AI 中切换。` : `This mission will use ${aiMode.toUpperCase()} selected in Settings → AI.`}</div>
+          {aiMode === "llm" && <div className="mb-5 space-y-3"><label className="block text-xs text-slate-400">{t("mission.projectContext")}<textarea value={projectContext} onChange={(event) => setProjectContext(event.target.value)} maxLength={4000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.projectPlaceholder")} /></label><label className="block text-xs text-slate-400">{t("mission.analysisPrompt")}<textarea value={analysisPrompt} onChange={(event) => setAnalysisPrompt(event.target.value)} maxLength={2000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.promptPlaceholder")} /></label><p className="text-[10px] leading-4 text-slate-600">{t("mission.llmNotice")}</p></div>}
+          <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>{t("actions.cancel")}</Button><Button onClick={createMission} active disabled={working}>{working ? t("actions.initRunning") : mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("actions.endAndCreate") : t("actions.initMission")}</Button></div>
+        </div>
+      </div>}
     </main>
-  );
+  </div>;
 }
 
 function Title({ icon, text, orange }: { icon: React.ReactNode; text: string; orange?: boolean }) { return <h2 className={`flex items-center gap-2 text-sm font-medium ${orange ? "[&>svg]:text-orange-300" : "[&>svg]:text-cyan-300"}`}>{icon}{text}</h2>; }

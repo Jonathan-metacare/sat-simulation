@@ -12,8 +12,8 @@
   --panel-shadow: inset 0 1px rgba(255,255,255,.025),0 18px 55px rgba(0,0,0,.18);
   --scan-a: rgba(91,210,232,.03);
   --scan-b: rgba(91,210,232,.03);
-  --mission-drawer-width: min(44rem, 42vw);
-  --task-list-drawer-width: min(26rem, 30vw);
+  --activity-bar-width: 4rem;
+  --workspace-sidebar-width: min(30rem, 34vw);
 }
 
 :root[data-theme="light"] {
@@ -41,15 +41,13 @@ button, input, select { font: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .panel { border: 1px solid var(--line); background: var(--panel-bg); box-shadow: var(--panel-shadow); backdrop-filter: blur(16px); }
 .grid-scan { background-image: linear-gradient(var(--scan-a) 1px,transparent 1px),linear-gradient(90deg,var(--scan-b) 1px,transparent 1px); background-size: 28px 28px; }
-.mission-content { width:100%; min-width:0; transition:width .3s ease,margin-right .3s ease; }
-.mission-drawer { width:min(100vw,44rem); background:rgba(4,21,33,.98); }
-.task-list-drawer { width:min(100vw,26rem); background:rgba(4,21,33,.98); }
-@media (min-width:1024px) {
-  .mission-drawer { width:var(--mission-drawer-width); }
-  .task-list-drawer { width:var(--task-list-drawer-width); }
-  .mission-content--drawer-open { width:calc(100% - var(--mission-drawer-width)); margin-right:var(--mission-drawer-width); }
-  .mission-content--task-list-open { width:calc(100% - var(--task-list-drawer-width)); margin-left:var(--task-list-drawer-width); }
-}
+.workspace-shell { display:flex; width:100%; min-height:100vh; align-items:stretch; }
+.mission-content { flex:1 1 0%; min-width:0; }
+.activity-bar { position:sticky; top:0; flex:0 0 var(--activity-bar-width); width:var(--activity-bar-width); height:100vh; background:rgba(3,14,23,.98); backdrop-filter:blur(16px); }
+.activity-bar-button { display:flex; align-items:center; justify-content:center; width:2.75rem; height:2.75rem; margin:.18rem 0; border:1px solid transparent; border-radius:.7rem; color:#7897a8; transition:color .18s ease,background .18s ease,border-color .18s ease; }
+.activity-bar-button:hover { color:#bff7ff; background:rgba(81,229,255,.1); border-color:rgba(81,229,255,.2); }
+.activity-bar-button--active { color:#51e5ff; background:rgba(81,229,255,.14); border-color:rgba(81,229,255,.34); box-shadow:inset 2px 0 #51e5ff,0 0 18px rgba(81,229,255,.08); }
+.workspace-sidebar { position:sticky; top:0; flex:0 0 var(--workspace-sidebar-width); width:var(--workspace-sidebar-width); height:100vh; min-width:0; background:rgba(4,21,33,.98); }
 .status-pulse::before { content:""; display:inline-block; width:7px; height:7px; margin-right:7px; border-radius:999px; background:#5af5ac; box-shadow:0 0 13px #5af5ac; }
 .cesium-viewer-bottom,.cesium-viewer-toolbar { display:none!important; }
 @keyframes flow { to { stroke-dashoffset:-36; } }
@@ -113,10 +111,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 :root[data-theme="light"] .llm-markdown strong { color:#0b3446; }
 :root[data-theme="light"] .llm-markdown code,
 :root[data-theme="light"] .llm-markdown pre { background:rgba(216,238,246,.84); color:#0b657d; border-color:rgba(7,102,132,.18); }
-:root[data-theme="light"] .mission-drawer { background:rgba(234,247,252,.98); border-color:rgba(7,102,132,.24); box-shadow:-14px 0 34px rgba(10,74,96,.14); }
-:root[data-theme="light"] .task-list-drawer { background:rgba(234,247,252,.98); border-color:rgba(7,102,132,.24); box-shadow:14px 0 34px rgba(10,74,96,.14); }
-:root[data-theme="light"] .mission-drawer .text-emerald-200\/80 { color:#08764d !important; opacity:1 !important; }
-:root[data-theme="light"] .mission-drawer .text-cyan-100 { color:#07536b !important; }
+:root[data-theme="light"] .activity-bar { background:rgba(225,242,248,.98); border-color:rgba(7,102,132,.24); }
+:root[data-theme="light"] .activity-bar-button { color:#426779; }
+:root[data-theme="light"] .activity-bar-button:hover { color:#07536b; background:rgba(8,145,178,.14); border-color:rgba(7,102,132,.24); }
+:root[data-theme="light"] .activity-bar-button--active { color:#08718b; background:rgba(8,145,178,.16); border-color:rgba(7,102,132,.32); box-shadow:inset 2px 0 #08718b,0 0 18px rgba(8,145,178,.08); }
+:root[data-theme="light"] .workspace-sidebar { background:rgba(234,247,252,.98); border-color:rgba(7,102,132,.24); box-shadow:14px 0 34px rgba(10,74,96,.14); }
+:root[data-theme="light"] .workspace-sidebar .text-emerald-200\/80 { color:#08764d !important; opacity:1 !important; }
+:root[data-theme="light"] .workspace-sidebar .text-cyan-100 { color:#07536b !important; }
 :root[data-theme="light"] .text-cyan-300\/60 { color:#08718b !important; opacity:1 !important; }
 
 /* The settings menu needs a clearly visible hover state in either theme. */
