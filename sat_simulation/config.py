@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     llm_api_url: str | None = None
     llm_model: str = "gpt-4.1-mini"
     llm_api_key: str | None = None
-    provider_timeout_seconds: float = 30
+    provider_timeout_seconds: float = 80
     stage_animation_seconds: float = 8.0
 
     @field_validator("database_url", mode="before")
