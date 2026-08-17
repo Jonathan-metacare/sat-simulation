@@ -20,8 +20,6 @@ extraResources:
     to: web/.next/static
   - from: public
     to: web/public
-  - from: desktop/python-dist/sat-sim-service.app
-    to: python/sat-sim-service.app
 mac:
   target:
     - target: dmg
@@ -31,3 +29,16 @@ mac:
   hardenedRuntime: false
 dmg:
   title: SpaceZenith-Sim
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}-x64.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SpaceZenith-Sim

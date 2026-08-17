@@ -6,16 +6,24 @@ import fs from "node:fs";
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const webDirectory = path.resolve(scriptDirectory, "../..");
 const projectDirectory = path.resolve(webDirectory, "..");
-const outputDirectory = path.join(webDirectory, "desktop", "python-dist");
-const workDirectory = path.join(webDirectory, "desktop", ".pyinstaller-work");
+const requestedPlatform = process.argv.find((value) => value.startsWith("--platform="))?.split("=", 2)[1];
+const targetPlatform = requestedPlatform ?? process.platform;
+
+if (!new Set(["darwin", "win32"]).has(targetPlatform)) {
+  throw new Error(`Unsupported desktop Python build platform: ${targetPlatform}`);
+}
+
+// PyInstaller cannot cross-compile.  Each target gets a separate output tree
+// so a Windows build machine never overwrites the macOS helper (and vice versa).
+const outputDirectory = path.join(webDirectory, "desktop", "python-dist", targetPlatform);
+const workDirectory = path.join(webDirectory, "desktop", ".pyinstaller-work", targetPlatform);
 
 fs.mkdirSync(outputDirectory, { recursive: true });
 const result = spawnSync(
   "uv",
   [
     // A one-file build unpacks the geospatial runtime on every service launch.
-    // On macOS that can exceed the desktop health-check timeout, so ship the
-    // PyInstaller directory build as an Electron resource instead.
+    // Ship a directory build for both macOS and Windows instead.
     "run", "pyinstaller", "--noconfirm", "--clean", "--windowed",
     "--name", "sat-sim-service", "--distpath", outputDirectory,
     "--workpath", workDirectory, "--specpath", workDirectory,
@@ -35,16 +43,18 @@ const result = spawnSync(
 );
 if (result.status !== 0) process.exit(result.status ?? 1);
 
-// A frozen macOS helper is also an application bundle.  Mark it as an agent
-// app so the three local simulation helpers do not get their own Dock icon.
-const infoPlist = path.join(outputDirectory, "sat-sim-service.app", "Contents", "Info.plist");
-const plistResult = spawnSync("plutil", ["-replace", "LSUIElement", "-bool", "true", infoPlist], {
-  cwd: projectDirectory,
-  stdio: "inherit",
-});
-if (plistResult.status !== 0) process.exit(plistResult.status ?? 1);
-const backgroundResult = spawnSync("plutil", ["-replace", "LSBackgroundOnly", "-bool", "true", infoPlist], {
-  cwd: projectDirectory,
-  stdio: "inherit",
-});
-if (backgroundResult.status !== 0) process.exit(backgroundResult.status ?? 1);
+if (targetPlatform === "darwin") {
+  // A frozen macOS helper is also an application bundle. Mark it as an agent
+  // app so the three local simulation helpers do not get their own Dock icon.
+  const infoPlist = path.join(outputDirectory, "sat-sim-service.app", "Contents", "Info.plist");
+  const plistResult = spawnSync("plutil", ["-replace", "LSUIElement", "-bool", "true", infoPlist], {
+    cwd: projectDirectory,
+    stdio: "inherit",
+  });
+  if (plistResult.status !== 0) process.exit(plistResult.status ?? 1);
+  const backgroundResult = spawnSync("plutil", ["-replace", "LSBackgroundOnly", "-bool", "true", infoPlist], {
+    cwd: projectDirectory,
+    stdio: "inherit",
+  });
+  if (backgroundResult.status !== 0) process.exit(backgroundResult.status ?? 1);
+}

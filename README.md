@@ -35,10 +35,16 @@ docker compose up --build
 - 地面站：<http://localhost:3000>
 - Ground OpenAPI：<http://localhost:8000/docs>
 
-## macOS 桌面版
+## 桌面版（macOS 与 Windows）
 
 Electron 桌面版会在一个 App 内自动启动 Ground、Platform、GPU 与 Web，首版目标为
-Apple Silicon。开发和打包说明见 [docs/DESKTOP.md](docs/DESKTOP.md)。
+Apple Silicon macOS 与 Windows 10/11 x64。开发和打包说明见
+[docs/DESKTOP.md](docs/DESKTOP.md)。Windows 安装程序须在 Windows x64 本机构建：
+
+```powershell
+cd web
+pnpm desktop:dist:win
+```
 
 Web 使用 `?tab=ground|platform|optical|gpu` 切换地面站、星务平台、光学载荷和
 GPU Payload。只有地面站页提供任务控制；其他节点页属于仿真观察平面，下载的

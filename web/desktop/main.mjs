@@ -149,6 +149,7 @@ function spawnTracked(name, command, commandArgs, environment, workingDirectory)
     // PyInstaller's one-file bootloader spawns the actual service process.
     // A dedicated group lets shutdown terminate both the bootloader and child.
     detached: process.platform !== "win32",
+    windowsHide: process.platform === "win32",
   });
   child.stdout.on("data", (value) => appendLog(name, value));
   child.stderr.on("data", (value) => appendLog(name, value));
@@ -185,6 +186,12 @@ function spawnPackagedService(name, port) {
 
 function serviceCommand() {
   if (app.isPackaged) {
+    if (process.platform === "win32") {
+      return {
+        command: path.join(process.resourcesPath, "python", "sat-sim-service", "sat-sim-service.exe"),
+        prefix: [],
+      };
+    }
     return {
       command: path.join(process.resourcesPath, "python", "sat-sim-service.app", "Contents", "MacOS", "sat-sim-service"),
       prefix: [],
@@ -197,7 +204,7 @@ function serviceCommand() {
 }
 
 function startService(name, port) {
-  if (app.isPackaged) return spawnPackagedService(name, port);
+  if (app.isPackaged && process.platform === "darwin") return spawnPackagedService(name, port);
   const executable = serviceCommand();
   return spawnTracked(
     name,
@@ -274,6 +281,18 @@ async function stopProcess(name) {
   }
   const child = processes.get(name);
   if (!child || child.exitCode !== null) return;
+  if (process.platform === "win32" && child.pid) {
+    // The frozen Python service can load GDAL worker threads. Terminate its
+    // process tree so an application exit or GPU restart cannot leave a local
+    // sat-sim-service.exe holding the dynamic port or SQLite file lock.
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+    await Promise.race([
+      new Promise((resolve) => child.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+    processes.delete(name);
+    return;
+  }
   const terminate = (signal) => {
     if (process.platform !== "win32" && child.pid) {
       try { process.kill(-child.pid, signal); return; } catch { /* process may have already exited */ }
