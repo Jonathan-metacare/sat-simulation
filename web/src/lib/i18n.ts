@@ -4,7 +4,7 @@ type Primitive = string | number | boolean | undefined | null;
 
 const dictionary = {
   zh: {
-    "app.title": "星上智能计算数字孪生",
+    "app.title": "SpaceZenith-Sim",
     "app.subtitle": "星务平台 · 光学载荷 · Virtual GTX · GPU 载荷 · 地面站",
     "app.online": "SIL ONLINE",
     "actions.missionPanel": "任务面板",
@@ -181,7 +181,7 @@ const dictionary = {
     "orbit.coverage": "地面站覆盖",
   },
   en: {
-    "app.title": "Onboard AI Satellite Digital Twin",
+    "app.title": "SpaceZenith-Sim",
     "app.subtitle": "Platform · Optical Payload · Virtual GTX · GPU Payload · Ground Station",
     "app.online": "SIL ONLINE",
     "actions.missionPanel": "Mission Panel",

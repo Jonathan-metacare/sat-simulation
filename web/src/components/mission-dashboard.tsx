@@ -84,7 +84,7 @@ export function MissionDashboard() {
   const [error, setError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [aiMode, setAiMode] = useState<AIMode>("yolo");
-  const [projectContext, setProjectContext] = useState("星上智能计算数字孪生光学观测任务");
+  const [projectContext, setProjectContext] = useState("SpaceZenith-Sim 光学观测任务");
   const [analysisPrompt, setAnalysisPrompt] = useState("识别图像中的主要地物、目标和异常，说明判断依据与不确定性。");
   const [missionResult, setMissionResult] = useState<MissionResultResponse>();
   const [playbackSpeed, setPlaybackSpeed] = useState<1 | 2 | 5>(1);

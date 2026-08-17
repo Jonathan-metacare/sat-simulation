@@ -618,7 +618,7 @@ export interface components {
             ai_mode: components["schemas"]["AIMode"];
             /**
              * Project Context
-             * @default 星上智能计算数字孪生光学观测任务
+             * @default SpaceZenith-Sim 光学观测任务
              */
             project_context: string;
             /**
@@ -667,7 +667,7 @@ export interface components {
             ai_mode: components["schemas"]["AIMode"];
             /**
              * Project Context
-             * @default 星上智能计算数字孪生光学观测任务
+             * @default SpaceZenith-Sim 光学观测任务
              */
             project_context: string;
             /**

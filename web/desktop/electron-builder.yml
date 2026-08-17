@@ -1,5 +1,5 @@
 appId: ai.spacezenith.sat-simulation
-productName: 星上智能计算数字孪生
+productName: SpaceZenith-Sim
 afterPack: desktop/after-pack.cjs
 directories:
   output: release
@@ -30,4 +30,4 @@ mac:
   category: public.app-category.developer-tools
   hardenedRuntime: false
 dmg:
-  title: 星上智能计算数字孪生
+  title: SpaceZenith-Sim

@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +16,9 @@ const defaultSettings = {
   activeAiMode: "yolo",
   activeScenarioId: "scenario-demo-beijing",
   cesiumIonToken: "",
-  llmApiUrl: "http://127.0.0.1:11434",
+  // A provider is an optional external integration.  Do not probe a local
+  // Ollama endpoint until the user explicitly configures and enables LLM.
+  llmApiUrl: "",
   llmModel: "",
   llmApiKey: "",
   yoloApiUrl: "",
@@ -28,7 +31,9 @@ let mainWindow;
 let runtime;
 let settings = { ...defaultSettings };
 let ipcRegistered = false;
+let isQuitting = false;
 const processes = new Map();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function runtimeDirectories() {
   const root = path.join(app.getPath("userData"), "runtime-data");
@@ -137,9 +142,15 @@ function spawnTracked(name, command, commandArgs, environment, workingDirectory)
     cwd: workingDirectory,
     env: environment,
     stdio: ["ignore", "pipe", "pipe"],
+    // PyInstaller's one-file bootloader spawns the actual service process.
+    // A dedicated group lets shutdown terminate both the bootloader and child.
+    detached: process.platform !== "win32",
   });
   child.stdout.on("data", (value) => appendLog(name, value));
   child.stderr.on("data", (value) => appendLog(name, value));
+  child.once("error", (error) => {
+    appendLog(name, `\n[spawn error] ${error.stack ?? error.message}\n`);
+  });
   child.once("exit", (code, signal) => {
     appendLog(name, `\n[exit code=${code ?? "null"} signal=${signal ?? "none"}]\n`);
     if (processes.get(name) === child) processes.delete(name);
@@ -149,7 +160,12 @@ function spawnTracked(name, command, commandArgs, environment, workingDirectory)
 }
 
 function serviceCommand() {
-  if (app.isPackaged) return { command: path.join(process.resourcesPath, "python", "sat-sim-service"), prefix: [] };
+  if (app.isPackaged) {
+    return {
+      command: path.join(process.resourcesPath, "python", "sat-sim-service", "sat-sim-service"),
+      prefix: [],
+    };
+  }
   return {
     command: path.join(projectDirectory, ".venv", "bin", "python"),
     prefix: [path.join(projectDirectory, "desktop", "python_service.py")],
@@ -193,14 +209,14 @@ async function restartWeb() {
   }
 }
 
-async function waitFor(url, name, timeout = 30000) {
+async function waitFor(url, name, timeout = 90000) {
   const deadline = Date.now() + timeout;
   let latest;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url);
-      if (response.ok) return;
-      latest = `HTTP ${response.status}`;
+      const status = await localHttpStatus(url);
+      if (status >= 200 && status < 300) return;
+      latest = `HTTP ${status}`;
     } catch (error) {
       latest = error instanceof Error ? error.message : String(error);
     }
@@ -209,15 +225,32 @@ async function waitFor(url, name, timeout = 30000) {
   throw new Error(`${name} 未在 ${timeout / 1000} 秒内就绪：${latest ?? "unknown error"}`);
 }
 
+function localHttpStatus(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, { timeout: 2000 }, (response) => {
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+    request.once("timeout", () => request.destroy(new Error("request timeout")));
+    request.once("error", reject);
+  });
+}
+
 async function stopProcess(name) {
   const child = processes.get(name);
   if (!child || child.exitCode !== null) return;
-  child.kill("SIGTERM");
+  const terminate = (signal) => {
+    if (process.platform !== "win32" && child.pid) {
+      try { process.kill(-child.pid, signal); return; } catch { /* process may have already exited */ }
+    }
+    child.kill(signal);
+  };
+  terminate("SIGTERM");
   await Promise.race([
     new Promise((resolve) => child.once("exit", resolve)),
     new Promise((resolve) => setTimeout(resolve, 3000)),
   ]);
-  if (child.exitCode === null) child.kill("SIGKILL");
+  if (child.exitCode === null) terminate("SIGKILL");
   processes.delete(name);
 }
 
@@ -230,12 +263,17 @@ async function startStack() {
   await Promise.all([fsp.mkdir(locations.root, { recursive: true }), fsp.mkdir(locations.logs, { recursive: true })]);
   runtime = { ports: await allocatePorts() };
   runtime.apiBase = `http://127.0.0.1:${runtime.ports.ground}/api`;
+  // All simulation nodes are independent at boot.  Start their frozen Python
+  // runtimes together: the first import of Rasterio/GDAL can take tens of
+  // seconds on macOS, but it must not serialize the whole desktop startup.
   startService("gpu", runtime.ports.gpu);
-  await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
   startService("platform", runtime.ports.platform);
-  await waitFor(`http://127.0.0.1:${runtime.ports.platform}/health`, "星务平台服务");
   startService("ground", runtime.ports.ground);
-  await waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务");
+  await Promise.all([
+    waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务"),
+    waitFor(`http://127.0.0.1:${runtime.ports.platform}/health`, "星务平台服务"),
+    waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务"),
+  ]);
   startWeb();
   await waitFor(`http://127.0.0.1:${runtime.ports.web}`, "Web 服务");
 }
@@ -303,7 +341,7 @@ async function bootstrap() {
   registerIpc();
   mainWindow = new BrowserWindow({
     width: 1500, height: 980, minWidth: 1080, minHeight: 720,
-    title: "星上智能计算数字孪生",
+    title: "SpaceZenith-Sim",
     webPreferences: {
       // In `electron desktop/main.mjs` development app.getAppPath() resolves
       // to web/desktop; packaged builds resolve to the application root.
@@ -325,11 +363,13 @@ async function bootstrap() {
       "typeof window.satSimDesktop",
     ).then((result) => appendLog("desktop", `[bridge] satSimDesktop=${result}\n`));
   });
-  await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>正在启动星上智能计算数字孪生…</body>");
+  await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>正在启动 SpaceZenith-Sim…</body>");
   try {
     await startStack();
     await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
   } catch (error) {
+    appendLog("desktop", `[startup failed] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    await stopStack();
     await dialog.showMessageBox(mainWindow, {
       type: "error", title: "本地仿真服务启动失败",
       message: error instanceof Error ? error.message : String(error),
@@ -339,6 +379,23 @@ async function bootstrap() {
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) bootstrap(); });
 }
 
-app.on("before-quit", () => { void stopStack(); });
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-bootstrap().catch((error) => { console.error(error); app.quit(); });
+if (!hasSingleInstanceLock) {
+  // The mounted DMG and /Applications can both appear in Spotlight.  Running
+  // both copies would start two service stacks against the same local data.
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+  app.on("before-quit", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    isQuitting = true;
+    void stopStack().finally(() => app.quit());
+  });
+  app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+  bootstrap().catch((error) => { console.error(error); app.quit(); });
+}

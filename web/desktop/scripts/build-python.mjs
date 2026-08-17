@@ -13,7 +13,10 @@ fs.mkdirSync(outputDirectory, { recursive: true });
 const result = spawnSync(
   "uv",
   [
-    "run", "pyinstaller", "--noconfirm", "--clean", "--onefile",
+    // A one-file build unpacks the geospatial runtime on every service launch.
+    // On macOS that can exceed the desktop health-check timeout, so ship the
+    // PyInstaller directory build as an Electron resource instead.
+    "run", "pyinstaller", "--noconfirm", "--clean",
     "--name", "sat-sim-service", "--distpath", outputDirectory,
     "--workpath", workDirectory, "--specpath", workDirectory,
     "--collect-all", "rasterio", "--collect-all", "cv2", "--collect-all", "pyproj",

@@ -1,7 +1,7 @@
 {
-  "name": "sat-simulation-web",
+  "name": "spacezenith-sim",
   "version": "0.1.1",
-  "description": "Satellite onboard AI software-in-the-loop desktop dashboard",
+  "description": "SpaceZenith-Sim satellite onboard AI software-in-the-loop desktop dashboard",
   "author": "SpaceZenith",
   "private": true,
   "type": "module",

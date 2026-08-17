@@ -1,4 +1,4 @@
-# macOS Desktop App
+# SpaceZenith-Sim for macOS
 
 The desktop build embeds the Ground, Platform and GPU services inside one
 Electron application. It binds every service to `127.0.0.1`, creates its own
@@ -41,7 +41,7 @@ opening **System Settings → Privacy & Security** and choosing **Open Anyway**.
 The app keeps all persistent state under:
 
 ```text
-~/Library/Application Support/星上智能计算数字孪生/
+~/Library/Application Support/SpaceZenith-Sim/
 ```
 
 This includes SQLite, mission artifacts, service logs, and
