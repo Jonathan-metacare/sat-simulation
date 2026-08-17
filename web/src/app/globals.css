@@ -13,6 +13,7 @@
   --scan-a: rgba(91,210,232,.03);
   --scan-b: rgba(91,210,232,.03);
   --mission-drawer-width: min(44rem, 42vw);
+  --task-list-drawer-width: min(26rem, 30vw);
 }
 
 :root[data-theme="light"] {
@@ -42,9 +43,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .grid-scan { background-image: linear-gradient(var(--scan-a) 1px,transparent 1px),linear-gradient(90deg,var(--scan-b) 1px,transparent 1px); background-size: 28px 28px; }
 .mission-content { width:100%; min-width:0; transition:width .3s ease,margin-right .3s ease; }
 .mission-drawer { width:min(100vw,44rem); background:rgba(4,21,33,.98); }
+.task-list-drawer { width:min(100vw,26rem); background:rgba(4,21,33,.98); }
 @media (min-width:1024px) {
   .mission-drawer { width:var(--mission-drawer-width); }
+  .task-list-drawer { width:var(--task-list-drawer-width); }
   .mission-content--drawer-open { width:calc(100% - var(--mission-drawer-width)); margin-right:var(--mission-drawer-width); }
+  .mission-content--task-list-open { width:calc(100% - var(--task-list-drawer-width)); margin-left:var(--task-list-drawer-width); }
 }
 .status-pulse::before { content:""; display:inline-block; width:7px; height:7px; margin-right:7px; border-radius:999px; background:#5af5ac; box-shadow:0 0 13px #5af5ac; }
 .cesium-viewer-bottom,.cesium-viewer-toolbar { display:none!important; }
@@ -110,6 +114,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 :root[data-theme="light"] .llm-markdown code,
 :root[data-theme="light"] .llm-markdown pre { background:rgba(216,238,246,.84); color:#0b657d; border-color:rgba(7,102,132,.18); }
 :root[data-theme="light"] .mission-drawer { background:rgba(234,247,252,.98); border-color:rgba(7,102,132,.24); box-shadow:-14px 0 34px rgba(10,74,96,.14); }
+:root[data-theme="light"] .task-list-drawer { background:rgba(234,247,252,.98); border-color:rgba(7,102,132,.24); box-shadow:14px 0 34px rgba(10,74,96,.14); }
 :root[data-theme="light"] .mission-drawer .text-emerald-200\/80 { color:#08764d !important; opacity:1 !important; }
 :root[data-theme="light"] .mission-drawer .text-cyan-100 { color:#07536b !important; }
 :root[data-theme="light"] .text-cyan-300\/60 { color:#08718b !important; opacity:1 !important; }
