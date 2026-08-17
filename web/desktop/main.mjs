@@ -33,6 +33,10 @@ let settings = { ...defaultSettings };
 let ipcRegistered = false;
 let isQuitting = false;
 const processes = new Map();
+// LaunchServices returns immediately for packaged service agents.  Retain the
+// exact role-and-port identity separately so they can still be stopped later
+// without keeping a visible `open -W` helper process alive in the Dock.
+const packagedServicePatterns = new Map();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function runtimeDirectories() {
@@ -159,10 +163,30 @@ function spawnTracked(name, command, commandArgs, environment, workingDirectory)
   return child;
 }
 
+function spawnPackagedService(name, port) {
+  const bundle = path.join(process.resourcesPath, "python", "sat-sim-service.app");
+  const serviceArguments = [name, "--host", "127.0.0.1", "--port", String(port)];
+  const environment = sharedEnvironment();
+  // Launch through LaunchServices rather than executing the bundle's helper
+  // binary directly.  This makes macOS honor LSUIElement and keeps simulation
+  // workers out of the Dock (where they otherwise appear as generic `exec`).
+  const openArguments = ["-n", "-g", "-j"];
+  for (const [key, value] of Object.entries(environment)) {
+    if (typeof value === "string") openArguments.push("--env", `${key}=${value}`);
+  }
+  openArguments.push(bundle, "--args", ...serviceArguments);
+  const child = spawnTracked(name, "/usr/bin/open", openArguments, process.env, projectDirectory);
+  // Do not use `open -W`: those three wait processes are what macOS presents
+  // as the unwanted generic `exec` Dock icon.  The helper's own argv remains
+  // a precise, local-only identity for shutdown.
+  packagedServicePatterns.set(name, `sat-sim-service ${name} --host 127.0.0.1 --port ${port}`);
+  return child;
+}
+
 function serviceCommand() {
   if (app.isPackaged) {
     return {
-      command: path.join(process.resourcesPath, "python", "sat-sim-service", "sat-sim-service"),
+      command: path.join(process.resourcesPath, "python", "sat-sim-service.app", "Contents", "MacOS", "sat-sim-service"),
       prefix: [],
     };
   }
@@ -173,6 +197,7 @@ function serviceCommand() {
 }
 
 function startService(name, port) {
+  if (app.isPackaged) return spawnPackagedService(name, port);
   const executable = serviceCommand();
   return spawnTracked(
     name,
@@ -237,6 +262,16 @@ function localHttpStatus(url) {
 }
 
 async function stopProcess(name) {
+  const serviceProcessPattern = packagedServicePatterns.get(name);
+  if (serviceProcessPattern) {
+    // The pattern includes the dynamically allocated port and service role;
+    // it cannot match a worker from a different desktop launch.
+    spawn("/usr/bin/pkill", ["-TERM", "-f", serviceProcessPattern], { stdio: "ignore" });
+    packagedServicePatterns.delete(name);
+    processes.delete(name);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return;
+  }
   const child = processes.get(name);
   if (!child || child.exitCode !== null) return;
   const terminate = (signal) => {
@@ -355,6 +390,11 @@ async function bootstrap() {
       contextIsolation: true, nodeIntegration: false, sandbox: false,
     },
   });
+  // This app is distributed as an unsigned DMG and may be upgraded by
+  // replacing the .app bundle while keeping Electron's user-data directory.
+  // Next marks hashed chunks immutable, so a cached 404 from an older bundle
+  // can otherwise prevent dynamic Cesium chunks from ever loading.
+  await mainWindow.webContents.session.clearCache();
   mainWindow.webContents.on("console-message", (_event, _level, message) => {
     appendLog("desktop", `[renderer] ${message}\n`);
   });

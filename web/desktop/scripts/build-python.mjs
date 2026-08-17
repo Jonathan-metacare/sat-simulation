@@ -16,7 +16,7 @@ const result = spawnSync(
     // A one-file build unpacks the geospatial runtime on every service launch.
     // On macOS that can exceed the desktop health-check timeout, so ship the
     // PyInstaller directory build as an Electron resource instead.
-    "run", "pyinstaller", "--noconfirm", "--clean",
+    "run", "pyinstaller", "--noconfirm", "--clean", "--windowed",
     "--name", "sat-sim-service", "--distpath", outputDirectory,
     "--workpath", workDirectory, "--specpath", workDirectory,
     "--collect-all", "rasterio", "--collect-all", "cv2", "--collect-all", "pyproj",
@@ -34,3 +34,17 @@ const result = spawnSync(
   { cwd: projectDirectory, stdio: "inherit" },
 );
 if (result.status !== 0) process.exit(result.status ?? 1);
+
+// A frozen macOS helper is also an application bundle.  Mark it as an agent
+// app so the three local simulation helpers do not get their own Dock icon.
+const infoPlist = path.join(outputDirectory, "sat-sim-service.app", "Contents", "Info.plist");
+const plistResult = spawnSync("plutil", ["-replace", "LSUIElement", "-bool", "true", infoPlist], {
+  cwd: projectDirectory,
+  stdio: "inherit",
+});
+if (plistResult.status !== 0) process.exit(plistResult.status ?? 1);
+const backgroundResult = spawnSync("plutil", ["-replace", "LSBackgroundOnly", "-bool", "true", infoPlist], {
+  cwd: projectDirectory,
+  stdio: "inherit",
+});
+if (backgroundResult.status !== 0) process.exit(backgroundResult.status ?? 1);

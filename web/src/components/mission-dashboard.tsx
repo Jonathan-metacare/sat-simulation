@@ -258,8 +258,15 @@ export function MissionDashboard() {
     setWorking(true);
     setError(undefined);
     try {
-      if (!historyView && mission && !["completed", "cancelled"].includes(mission.execution_state)) {
-        await api.cancelMission(mission.command.id);
+      // A non-terminal mission can be selected through the history drawer.
+      // It still owns the scenario, so treating it as read-only must not leave
+      // the user unable either to continue or to start a new run.
+      const scenarioActiveMission = missionSummaries.find((item) =>
+        item.command.scenario_id === scenario.config.id
+        && !["completed", "cancelled"].includes(item.execution_state)
+      );
+      if (scenarioActiveMission) {
+        await api.cancelMission(scenarioActiveMission.command.id);
       }
       const created = await api.createMission(
         scenario.config.id, aiMode, projectContext.trim(), analysisPrompt.trim()
@@ -455,7 +462,7 @@ export function MissionDashboard() {
                 <span className={`rounded border px-2 py-1 text-[10px] ${viewedScenario?.clock.paused ? "border-emerald-300/20 text-emerald-300" : "border-orange-300/20 text-orange-300"}`}>{viewedScenario?.clock.paused ? t("controls.paused") : t("controls.running")}</span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {([1, 2, 5] as const).map((rate) => <Button key={rate} onClick={() => setPlaybackSpeed(rate)} active={playbackSpeed === rate}>{rate}x</Button>)}
+                {/* {([1, 2, 5] as const).map((rate) => <Button key={rate} onClick={() => setPlaybackSpeed(rate)} active={playbackSpeed === rate}>{rate}x</Button>)} */}
                 <Button onClick={() => setCreateOpen(true)} disabled={!scenario || (!historyView && mission?.execution_state === "running")}><Zap size={14} />{t("actions.newMission")}</Button>
                 <Button onClick={advanceMission} active disabled={historyView || !mission?.can_advance || mission?.execution_state === "running" || working}>
                   {mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}

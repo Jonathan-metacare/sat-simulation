@@ -17,6 +17,29 @@ interface OrbitGlobeProps {
 
 type SceneInputs = OrbitGlobeProps;
 
+function loadCesium(): Promise<typeof Cesium> {
+  // Keep Cesium outside Next's module graph.  CesiumUnminified/Cesium.js is a
+  // classic browser script, not an ES module; appending it as a script avoids
+  // both Next's WASM minification issue and the bare @cesium/engine imports
+  // present in Cesium's Source tree.
+  if (window.Cesium) return Promise.resolve(window.Cesium);
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-sat-sim-cesium="true"]');
+    if (existing) {
+      existing.addEventListener("load", () => window.Cesium ? resolve(window.Cesium) : reject(new Error("Cesium global was not initialized")), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Cesium script failed to load")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "/cesium/Cesium.js";
+    script.async = true;
+    script.dataset.satSimCesium = "true";
+    script.onload = () => window.Cesium ? resolve(window.Cesium) : reject(new Error("Cesium global was not initialized"));
+    script.onerror = () => reject(new Error("Cesium script failed to load"));
+    document.head.appendChild(script);
+  });
+}
+
 function cartesian(C: typeof Cesium, sample: OrbitSample) {
   return C.Cartesian3.fromDegrees(sample.longitude, sample.latitude, sample.altitude_km * 1000);
 }
@@ -223,6 +246,7 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
   const viewer = useRef<Cesium.Viewer | undefined>(undefined);
   const cesium = useRef<typeof Cesium | undefined>(undefined);
   const [desktopIonToken, setDesktopIonToken] = useState<string>();
+  const [renderError, setRenderError] = useState(false);
   const latestInputs = useRef<SceneInputs>({ track, station, target });
   latestInputs.current = { track, station, target, locale };
 
@@ -235,12 +259,13 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
     if (!element.current) return;
     let disposed = false;
     void (async () => {
-      window.CESIUM_BASE_URL = process.env.NEXT_PUBLIC_CESIUM_BASE_URL ?? "/cesium/";
-      const C = await import("cesium");
-      if (disposed || !element.current) return;
-      const ionAccessToken = desktopIonToken || process.env.NEXT_PUBLIC_CESIUM_ION_ACCESS_TOKEN;
-      if (ionAccessToken) C.Ion.defaultAccessToken = ionAccessToken;
-      const instance = new C.Viewer(element.current, {
+      try {
+        window.CESIUM_BASE_URL = process.env.NEXT_PUBLIC_CESIUM_BASE_URL ?? "/cesium/";
+        const C = await loadCesium();
+        if (disposed || !element.current) return;
+        const ionAccessToken = desktopIonToken || process.env.NEXT_PUBLIC_CESIUM_ION_ACCESS_TOKEN;
+        if (ionAccessToken) C.Ion.defaultAccessToken = ionAccessToken;
+        const instance = new C.Viewer(element.current, {
         animation: false,
         timeline: false,
         geocoder: false,
@@ -251,20 +276,34 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
         fullscreenButton: false,
         infoBox: false,
         selectionIndicator: false,
-        // Asset 2 is Cesium Ion World Imagery.  Without a configured token we
-        // intentionally retain the deterministic dark globe used by the SIL.
+        // Asset 2 is Cesium Ion World Imagery.  In offline mode the built-in
+        // GridImageryProvider is entirely local: it deliberately makes the
+        // deterministic simulation globe visible without a network or token.
         baseLayer: ionAccessToken
           ? C.ImageryLayer.fromProviderAsync(C.IonImageryProvider.fromAssetId(2))
-          : false,
+          : new C.ImageryLayer(new C.GridImageryProvider({
+            cells: 12,
+            color: C.Color.fromCssColorString("#1e6476").withAlpha(0.72),
+            glowColor: C.Color.fromCssColorString("#0b2c39").withAlpha(0.45),
+            backgroundColor: C.Color.fromCssColorString("#112f3d").withAlpha(1),
+          })),
         terrain: ionAccessToken ? C.Terrain.fromWorldTerrain() : undefined,
         skyBox: false,
       });
-      instance.scene.globe.baseColor = C.Color.fromCssColorString(ionAccessToken ? "#183c4d" : "#071722");
-      instance.scene.backgroundColor = C.Color.fromCssColorString("#02080d");
-      instance.scene.globe.enableLighting = true;
-      viewer.current = instance;
-      cesium.current = C;
-      drawScene(instance, C, latestInputs.current, true);
+        instance.scene.globe.show = true;
+        instance.scene.globe.baseColor = C.Color.fromCssColorString(ionAccessToken ? "#183c4d" : "#112f3d");
+        instance.scene.backgroundColor = C.Color.fromCssColorString("#02080d");
+        instance.scene.globe.enableLighting = false;
+        viewer.current = instance;
+        cesium.current = C;
+        setRenderError(false);
+        drawScene(instance, C, latestInputs.current, true);
+      } catch (error) {
+        if (!disposed) {
+          console.error("Cesium local globe initialization failed", error);
+          setRenderError(true);
+        }
+      }
     })();
     return () => {
       disposed = true;
@@ -294,6 +333,7 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
   return (
     <div className="relative h-[360px] w-full flex-1 overflow-hidden bg-[#02080d] sm:h-[390px] xl:h-auto xl:min-h-[420px]">
       <div ref={element} className="absolute inset-0" aria-label="Cesium 轨道态势视图" />
+      {renderError && <div className="absolute inset-0 grid place-items-center bg-[#071722] text-xs text-cyan-100">{locale === "zh" ? "本地轨道球体加载失败" : "Local orbit globe failed to load"}</div>}
       <div className="pointer-events-none absolute left-3 top-3 grid grid-cols-2 gap-2 sm:left-4 sm:top-4">
         <MapMetric
           label={translate(locale, "orbit.elevation")}
@@ -333,5 +373,8 @@ function Legend({ color, label, dashed }: { color: string; label: string; dashed
 }
 
 declare global {
-  interface Window { CESIUM_BASE_URL: string }
+  interface Window {
+    CESIUM_BASE_URL: string;
+    Cesium?: typeof Cesium;
+  }
 }
