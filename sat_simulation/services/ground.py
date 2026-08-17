@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 import zipfile
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -57,7 +58,7 @@ from sat_simulation.common.orbit import orbit_track, plan_mission_windows
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
 from sat_simulation.config import Settings, settings
-from sat_simulation.optical.pipeline import sha256_file
+from sat_simulation.optical.pipeline import ensure_demo_scene, sha256_file
 from sat_simulation.storage import Repository
 
 PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
@@ -136,8 +137,68 @@ class GroundState:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.scene_dir.mkdir(parents=True, exist_ok=True)
         await self.repo.init()
+        await self.ensure_default_scene()
         await self.repo.recover_running_missions()
         await self.receiver.start(self.settings.host, self.settings.ground_downlink_port)
+
+    async def ensure_default_scene(self) -> None:
+        """Install the versioned Beijing fixture into the writable runtime data."""
+        default_id = "scenario-demo-beijing"
+        if await self.repo.get_scenario(default_id):
+            return
+        repository_root = Path(__file__).resolve().parents[2]
+        config_dir = self.data_dir / "scenario-configs"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        source_yaml = repository_root / "scenarios" / "demo-beijing.yaml"
+        imported: ImportedScenarioYaml | None = None
+        if source_yaml.is_file():
+            shutil.copy2(source_yaml, config_dir / source_yaml.name)
+            imported = ImportedScenarioYaml.model_validate(
+                yaml.safe_load(source_yaml.read_text(encoding="utf-8"))
+            )
+        scene_path, metadata = ensure_demo_scene(self.scene_dir)
+        await self.repo.add_scene(
+            scene_id=metadata.scene_id,
+            name="demo-beijing built-in 16-bit GeoTIFF",
+            path=str(scene_path),
+            sha256=sha256_file(scene_path),
+            metadata={"source": "built-in", "crs": metadata.crs},
+        )
+        if imported:
+            defaults = default_link_profiles()
+            links = {
+                kind: defaults[kind].model_copy(
+                    update={key: value for key, value in source.model_dump().items() if value is not None}
+                )
+                for kind, source in (
+                    (LinkKind.GTX, imported.links.gtx),
+                    (LinkKind.UPLINK, imported.links.uplink),
+                    (LinkKind.DOWNLINK, imported.links.downlink),
+                )
+            }
+            config = ScenarioConfig(
+                id=default_id,
+                name=imported.name,
+                seed=imported.seed,
+                clock_rate=imported.clock_rate,
+                tle_line1=imported.satellite.tle_line1,
+                tle_line2=imported.satellite.tle_line2,
+                satellite_name=imported.satellite.name,
+                ground_station_name=imported.ground_station.id,
+                ground_station_latitude=imported.ground_station.latitude,
+                ground_station_longitude=imported.ground_station.longitude,
+                ground_station_altitude_m=imported.ground_station.altitude_m,
+                deterministic_contact=imported.ground_station.simulated,
+                scene_id=metadata.scene_id,
+                scene_ready=True,
+                links=links,
+                sensor=imported.sensor,
+            )
+        else:
+            config = ScenarioConfig(id=default_id, scene_id=metadata.scene_id, scene_ready=True)
+        clock = SimulationClock(config.epoch, config.clock_rate)
+        self.clocks[config.id] = clock
+        await self.repo.create_scenario(config, clock.state())
 
     async def close(self) -> None:
         for task in self.tasks:
@@ -780,6 +841,11 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         clock = SimulationClock(config.epoch, config.clock_rate)
         state.clocks[config.id] = clock
         await state.repo.create_scenario(config, clock.state())
+        config_dir = state.data_dir / "scenario-configs"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / f"{config.id}.yaml").write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
         return {
             "config": config,
             "clock": clock.state(),

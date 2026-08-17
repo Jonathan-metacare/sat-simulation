@@ -5,11 +5,13 @@ import { LoaderCircle, Settings2, X } from "lucide-react";
 
 import { desktopBridge, type DesktopSettings } from "~/lib/desktop";
 import { api } from "~/lib/api";
+import type { ScenarioRecord } from "~/lib/types";
 import type { Locale } from "~/lib/store";
 
 const emptySettings: DesktopSettings = {
   locale: "zh", theme: "dark", cesiumIonToken: "",
   activeAiMode: "yolo",
+  activeScenarioId: "scenario-demo-beijing",
   llmApiUrl: "http://127.0.0.1:11434", llmModel: "", llmApiKey: "",
   yoloApiUrl: "", yoloModel: "default", yoloApiKey: "", providerTimeoutSeconds: 30,
 };
@@ -38,7 +40,7 @@ function sectionTitle(section: SettingsSection, zh: boolean) {
   })[section];
 }
 
-export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme, onAiMode, initialSection = "general", onScenarioImported, onSettingsSaved }: { open: boolean; onClose(): void; locale: Locale; onLocale(value: Locale): void; onTheme(value: "dark" | "light"): void; onAiMode(value: "yolo" | "llm"): void; initialSection?: SettingsSection; onScenarioImported?(): void; onSettingsSaved?(): void }) {
+export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme, onAiMode, initialSection = "general", onScenarioImported, onSettingsSaved, activeScenarioId, onScenarioSelected }: { open: boolean; onClose(): void; locale: Locale; onLocale(value: Locale): void; onTheme(value: "dark" | "light"): void; onAiMode(value: "yolo" | "llm"): void; initialSection?: SettingsSection; onScenarioImported?(): void; onSettingsSaved?(): void; activeScenarioId?: string; onScenarioSelected?(scenario: ScenarioRecord): Promise<void> | void }) {
   const bridge = desktopBridge();
   const zh = locale === "zh";
   const [value, setValue] = useState<DesktopSettings>(emptySettings);
@@ -50,13 +52,14 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
   const [sceneId, setSceneId] = useState("");
   const [scenarioId, setScenarioId] = useState("");
   const [sceneNotice, setSceneNotice] = useState<string>();
+  const [scenarios, setScenarios] = useState<ScenarioRecord[]>([]);
 
   useEffect(() => {
     if (!open || !bridge) return;
-    void bridge.getSettings().then((saved) => {
-      setValue(saved); setError(undefined);
+    void Promise.all([bridge.getSettings(), api.scenarios()]).then(([saved, records]) => {
+      setValue({ ...saved, activeScenarioId: saved.activeScenarioId || activeScenarioId || "scenario-demo-beijing" }); setScenarios(records); setError(undefined);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, [bridge, open]);
+  }, [activeScenarioId, bridge, open]);
   useEffect(() => { if (open) setSection(initialSection); }, [initialSection, open]);
 
   if (!open) return null;
@@ -76,7 +79,7 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
   const importYaml = async () => {
     if (!yamlFile) return;
     setWorking(true); setSceneNotice(undefined); setError(undefined);
-    try { const result = await api.importScenarioYaml(yamlFile); setScenarioId(result.config.id); setSceneId(result.config.scene_id); onScenarioImported?.(); setSceneNotice(`${zh ? "YAML 校验成功，场景已创建：" : "YAML validated and scenario created: "}${result.config.id}`); }
+    try { const result = await api.importScenarioYaml(yamlFile); setScenarioId(result.config.id); setSceneId(result.config.scene_id); const records = await api.scenarios(); setScenarios(records); onScenarioImported?.(); setSceneNotice(`${zh ? "YAML 校验成功，场景已创建：" : "YAML validated and scenario created: "}${result.config.id}`); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setWorking(false); }
   };
@@ -112,7 +115,7 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
         <Field label={zh ? "模型超时（秒）" : "Model timeout (seconds)"} type="number" value={value.providerTimeoutSeconds} onChange={(next) => update("providerTimeoutSeconds", Number(next) || 30)} />
       </div>}
       {section === "ai" && <div className="mt-4 rounded-xl border border-white/[.07] bg-black/20 p-3 text-xs text-slate-400"><div className="text-cyan-200">{zh ? "当前选择" : "Active selection"}</div><div className="mt-2">{value.activeAiMode === "yolo" ? "YOLO" : "LLM"} · {zh ? "后续新任务将使用此模式" : "Subsequent missions will use this mode"}</div></div>}
-      {section === "scene" && <div className="space-y-4"><p className="text-xs leading-5 text-slate-500">{zh ? "先导入严格校验的 YAML，再导入关联的 16-bit GeoTIFF。未知字段和非法值会被拒绝；两步都成功后，场景才可创建新任务。" : "Import a strictly validated YAML first, then its linked 16-bit GeoTIFF. Unknown fields and invalid values are rejected; a mission can only be created after both steps succeed."}</p><label className="block text-xs text-slate-400">YAML<input className="mt-1.5 block w-full text-xs" type="file" accept=".yaml,.yml" onChange={(event) => setYamlFile(event.target.files?.[0])} /></label><button disabled={!yamlFile || working} onClick={() => void importYaml()} className="rounded-lg border border-cyan-300/50 px-3 py-2 text-xs text-cyan-100">{zh ? "校验并导入 YAML" : "Validate and import YAML"}</button>{scenarioId && <p className="text-xs text-slate-500">scenario_id: {scenarioId}</p>}<Field label="scene_id" value={sceneId} onChange={setSceneId} /><label className="block text-xs text-slate-400">16-bit GeoTIFF<input className="mt-1.5 block w-full text-xs" type="file" accept=".tif,.tiff" onChange={(event) => setTiffFile(event.target.files?.[0])} /></label><button disabled={!tiffFile || !sceneId || !scenarioId || working} onClick={() => void importTiff()} className="rounded-lg border border-cyan-300/50 px-3 py-2 text-xs text-cyan-100">{zh ? "校验并关联 GeoTIFF" : "Validate and link GeoTIFF"}</button>{sceneNotice && <p className="text-xs text-emerald-300">{sceneNotice}</p>}</div>}
+      {section === "scene" && <div className="space-y-4"><p className="text-xs leading-5 text-slate-500">{zh ? "默认北京场景已经内置。用户导入的 YAML 与 16-bit GeoTIFF 会保存到本机运行数据目录，可在这里切换后续任务使用的场景。" : "The Beijing demo is built in. Imported YAML and 16-bit GeoTIFF files are saved to local runtime data; select a scene here for subsequent missions."}</p><label className="block text-xs text-slate-400">{zh ? "当前场景" : "Active scenario"}<select value={value.activeScenarioId} disabled={working} onChange={(event) => { const selected = scenarios.find((item) => item.config.id === event.target.value); if (!selected) return; setWorking(true); setError(undefined); void Promise.resolve(onScenarioSelected?.(selected)).then(() => update("activeScenarioId", selected.config.id)).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setWorking(false)); }} className="mt-1.5 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-100">{scenarios.map((item) => <option key={item.config.id} value={item.config.id} disabled={!item.config.scene_ready}>{item.config.name}{item.config.scene_ready ? "" : ` (${zh ? "等待 GeoTIFF" : "GeoTIFF required"})`}</option>)}</select></label><div className="border-t border-white/[.07] pt-4"><label className="block text-xs text-slate-400">YAML<input className="mt-1.5 block w-full text-xs" type="file" accept=".yaml,.yml" onChange={(event) => setYamlFile(event.target.files?.[0])} /></label><button disabled={!yamlFile || working} onClick={() => void importYaml()} className="mt-2 rounded-lg border border-cyan-300/50 px-3 py-2 text-xs text-cyan-100">{zh ? "校验并导入 YAML" : "Validate and import YAML"}</button>{scenarioId && <p className="mt-2 text-xs text-slate-500">scenario_id: {scenarioId}</p>}<Field label="scene_id" value={sceneId} onChange={setSceneId} /><label className="mt-3 block text-xs text-slate-400">16-bit GeoTIFF<input className="mt-1.5 block w-full text-xs" type="file" accept=".tif,.tiff" onChange={(event) => setTiffFile(event.target.files?.[0])} /></label><button disabled={!tiffFile || !sceneId || !scenarioId || working} onClick={() => void importTiff()} className="mt-2 rounded-lg border border-cyan-300/50 px-3 py-2 text-xs text-cyan-100">{zh ? "校验并关联 GeoTIFF" : "Validate and link GeoTIFF"}</button></div>{sceneNotice && <p className="text-xs text-emerald-300">{sceneNotice}</p>}</div>}
       {section === "about" && <div className="rounded-xl border border-white/[.07] bg-black/20 p-4 text-sm text-slate-300"><div className="text-cyan-200">{zh ? "软件版本" : "Software version"}</div><div className="mt-3 font-mono text-lg text-cyan-100">SIL ONLINE · v0.1.1</div><div className="mt-5 text-cyan-200">{zh ? "出品" : "Publisher"}</div><a href="https://www.spacezenith.ai" target="_blank" rel="noreferrer" onClick={(event) => { if (typeof bridge?.openExternal !== "function") return; event.preventDefault(); void bridge.openExternal("https://www.spacezenith.ai").catch(() => window.open("https://www.spacezenith.ai", "_blank", "noopener,noreferrer")); }} className="mt-2 inline-block text-left text-sm text-cyan-100 underline decoration-cyan-300/40 underline-offset-4 hover:text-cyan-300">www.spacezenith.ai</a></div>}
       {error && <p className="mt-4 rounded-lg border border-orange-300/25 bg-orange-300/10 px-3 py-2 text-xs text-orange-200">{error}</p>}
       <div className="mt-5 flex flex-wrap justify-end gap-2">

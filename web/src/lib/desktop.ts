@@ -2,6 +2,7 @@ export type DesktopSettings = {
   locale: "zh" | "en";
   theme: "dark" | "light";
   activeAiMode: "yolo" | "llm";
+  activeScenarioId: string;
   cesiumIonToken: string;
   llmApiUrl: string;
   llmModel: string;

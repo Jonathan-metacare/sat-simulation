@@ -93,6 +93,7 @@ export function MissionDashboard() {
   const [desktopSettingsOpen, setDesktopSettingsOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"general" | "plugins" | "ai" | "scene" | "about">("general");
+  const [savedScenarioId, setSavedScenarioId] = useState<string>();
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const missionId = mission?.command.id;
   const runId = mission?.command.run_id;
@@ -109,6 +110,7 @@ export function MissionDashboard() {
         setLocale(saved.locale);
         setTheme(saved.theme);
         setAiMode(saved.activeAiMode);
+        setSavedScenarioId(saved.activeScenarioId);
       });
       return;
     }
@@ -136,25 +138,31 @@ export function MissionDashboard() {
 
   const reload = useCallback(async () => {
     try {
-      const [publicConfig, scenarioRows, missionRows, providers] = await Promise.all([
-        api.config(), api.scenarios(), api.missions(), api.providerHealth()
+      const [publicConfig, scenarioRows, providers] = await Promise.all([
+        api.config(), api.scenarios(), api.providerHealth()
       ]);
       setConfig(publicConfig);
       setProviderHealth(providers);
-      const activeScenario = scenarioRows[0] ?? await api.createScenario();
+      const activeScenario = scenarioRows.find((item) => item.config.id === savedScenarioId)
+        ?? scenarioRows.find((item) => item.config.id === scenario?.config.id)
+        ?? scenarioRows.find((item) => item.config.scene_ready)
+        ?? scenarioRows[0]
+        ?? await api.createScenario();
       setScenario(activeScenario);
       try { setOrbit(await api.orbit(activeScenario.config.id)); }
       catch { setOrbit(undefined); }
-      // The dashboard has no historical mission selector in V1, so always follow
-      // the newest mission. Using the captured mission here could overwrite a
-      // just-created mission with the previously completed one.
-      const activeId = missionRows[0]?.command.id ?? mission?.command.id;
-      if (activeId) setMission(await api.mission(activeId));
+      // A mission belongs to the scenario snapshot it was created from. Never
+      // resurrect a latest/historical mission after the operator changes scenes.
+      const visibleMissionId = mission?.command.scenario_id === activeScenario.config.id
+        ? mission.command.id
+        : undefined;
+      if (visibleMissionId) setMission(await api.mission(visibleMissionId));
+      else setMission(undefined);
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "加载失败");
     } finally { setLoading(false); }
-  }, [mission?.command.id, setMission, setScenario]);
+  }, [mission?.command.id, mission?.command.scenario_id, savedScenarioId, scenario?.config.id, setMission, setScenario]);
 
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
@@ -303,7 +311,29 @@ export function MissionDashboard() {
 
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
-      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} onAiMode={setAiMode} initialSection={settingsSection} onScenarioImported={() => void reload()} onSettingsSaved={() => void reload()} />
+      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} onAiMode={setAiMode} initialSection={settingsSection} onScenarioImported={() => void reload()} onSettingsSaved={() => void reload()} activeScenarioId={scenario?.config.id} onScenarioSelected={(selected) => {
+        return (async () => {
+          if (selected.config.id === scenario?.config.id) return;
+          setWorking(true);
+          setError(undefined);
+          try {
+            // Preserve the old run for audit/replay, but make it terminal before
+            // its frozen YAML snapshot can no longer be the active scene.
+            if (mission && !["completed", "cancelled"].includes(mission.execution_state)) {
+              await api.cancelMission(mission.command.id);
+            }
+            setMission(undefined);
+            setSavedScenarioId(selected.config.id);
+            setScenario(selected);
+            setOrbit(await api.orbit(selected.config.id));
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "场景切换失败");
+            throw cause;
+          } finally {
+            setWorking(false);
+          }
+        })();
+      }} />
       <aside aria-label="任务控制面板" className={`mission-drawer fixed inset-y-0 right-0 z-50 flex w-full max-w-none flex-col border-l border-cyan-300/20 shadow-2xl shadow-black/50 transition-transform duration-300 ${missionPanelOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex items-center justify-between border-b border-cyan-200/10 px-5 py-4">
           <div><div className="text-sm font-medium text-cyan-100">{t("panel.title")}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{t("panel.subtitle")}</div></div>
@@ -443,5 +473,5 @@ function PanelHeader({ icon, title, note }: { icon: React.ReactNode; title: stri
 function Metric({ label, value, good }: { label: string; value: string; good?: boolean }) { return <div className="rounded-lg border border-white/[.055] bg-black/15 px-3 py-2"><div className="text-[9px] tracking-wider text-slate-600 uppercase">{label}</div><div className={`mt-1 font-mono text-xs ${good ? "text-emerald-300" : "text-slate-200"}`}>{value}</div></div>; }
 function Empty({ text }: { text: string }) { return <div className="py-8 text-center text-xs text-slate-600">{text}</div>; }
 function Stage({ label, complete, active, last }: { label: string; complete: boolean; active: boolean; last: boolean }) { return <div className="relative flex flex-1 flex-col items-center text-center"><div className={`relative z-10 size-3 rounded-full border ${active ? "border-cyan-100 bg-cyan-300 shadow-[0_0_14px_#51e5ff]" : complete ? "border-emerald-300 bg-emerald-400" : "border-slate-600 bg-slate-900"}`} />{!last && <div className={`absolute left-1/2 top-[5px] h-px w-full ${complete ? "bg-emerald-400/60" : "bg-slate-700"}`} />}<span className={`mt-3 text-[10px] ${active ? "text-cyan-100" : complete ? "text-emerald-200/80" : "text-slate-600"}`}>{label}</span></div>; }
-function LinkCard({ title, rate = 0, latency = 0, accent, locale }: { title: string; rate?: number; latency?: number; accent: "cyan" | "orange"; locale: Parameters<typeof translate>[0] }) { return <div className="rounded-xl border border-white/[.055] bg-black/15 p-3"><div className="mb-2 flex items-center justify-between text-xs"><span className="text-slate-300">{title}</span><span className="text-cyan-300">{translate(locale, "link.ready")}</span></div><div className="grid grid-cols-2 gap-2"><Metric label={translate(locale, "link.bandwidth")} value={rate >= 1e9 ? `${(rate / 1e9).toFixed(1)} Gbps` : `${(rate / 1e6).toFixed(0)} Mbps`} /><Metric label={translate(locale, "link.latency")} value={`${latency} ms`} /></div></div>; }
+function LinkCard({ title, rate = 0, latency = 0, accent, locale }: { title: string; rate?: number; latency?: number; accent: "cyan" | "orange"; locale: Parameters<typeof translate>[0] }) { const accentClass = accent === "orange" ? "text-orange-300" : "text-cyan-300"; return <div className="rounded-xl border border-white/[.055] bg-black/15 p-3"><div className="mb-2 flex items-center justify-between text-xs"><span className="text-slate-300">{title}</span><span className={accentClass}>{translate(locale, "link.ready")}</span></div><div className="grid grid-cols-2 gap-2"><Metric label={translate(locale, "link.bandwidth")} value={rate >= 1e9 ? `${(rate / 1e9).toFixed(1)} Gbps` : `${(rate / 1e6).toFixed(0)} Mbps`} /><Metric label={translate(locale, "link.latency")} value={`${latency} ms`} /></div></div>; }
 function ProductCard({ product }: { product: ProductManifest }) { return <a href={artifactURL(product.id)} target="_blank" rel="noreferrer" className="rounded-xl border border-white/[.06] bg-black/15 p-3 transition hover:border-cyan-300/25"><div className="mb-2 flex items-center justify-between"><span className="rounded bg-cyan-300/10 px-2 py-1 text-[10px] font-semibold text-cyan-200">{product.level.toUpperCase()}</span><span className="text-[10px] text-slate-600">{formatBytes(product.size_bytes)}</span></div><div className="truncate text-xs text-slate-300">{product.name}</div><div className="mt-2 truncate font-mono text-[9px] text-slate-600">SHA {product.sha256.slice(0, 16)}…</div></a>; }
