@@ -1,5 +1,6 @@
 appId: ai.spacezenith.sat-simulation
 productName: SpaceZenith-Sim
+npmRebuild: false
 afterPack: desktop/after-pack.cjs
 directories:
   output: release

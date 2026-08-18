@@ -61,6 +61,14 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
     }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, [activeScenarioId, bridge, open]);
   useEffect(() => { if (open) setSection(initialSection); }, [initialSection, open]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open]);
 
   if (!open) return null;
   if (!bridge) return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"><section className="panel w-full max-w-md rounded-2xl p-5"><div className="flex items-center justify-between"><h2 className="text-lg text-cyan-100">{locale === "zh" ? "设置" : "Settings"}</h2><button onClick={onClose}><X size={18} /></button></div><p className="mt-4 text-sm leading-6 text-slate-400">{locale === "zh" ? "请使用桌面应用配置本机 Cesium、YOLO、LLM 和场景导入。浏览器版仅提供只读仿真控制。" : "Use the desktop application to configure local Cesium, YOLO, LLM, and scene imports. The browser edition is read-only for local settings."}</p></section></div>;

@@ -83,6 +83,7 @@ export function MissionDashboard() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
   const [aiMode, setAiMode] = useState<AIMode>("yolo");
   const [projectContext, setProjectContext] = useState("SpaceZenith-Sim 光学观测任务");
   const [analysisPrompt, setAnalysisPrompt] = useState("识别图像中的主要地物、目标和异常，说明判断依据与不确定性。");
@@ -136,6 +137,18 @@ export function MissionDashboard() {
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [settingsMenuOpen]);
+  useEffect(() => {
+    const closeTransientUi = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (replaceConfirmOpen) { setReplaceConfirmOpen(false); return; }
+      if (createOpen) { setCreateOpen(false); return; }
+      if (desktopSettingsOpen) { setDesktopSettingsOpen(false); return; }
+      if (settingsMenuOpen) { setSettingsMenuOpen(false); return; }
+      if (activeSidebar) setActiveSidebar(undefined);
+    };
+    window.addEventListener("keydown", closeTransientUi);
+    return () => window.removeEventListener("keydown", closeTransientUi);
+  }, [activeSidebar, createOpen, desktopSettingsOpen, replaceConfirmOpen, settingsMenuOpen]);
   useEffect(() => {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
     window.localStorage.setItem("sat-sim-locale", locale);
@@ -282,6 +295,17 @@ export function MissionDashboard() {
       setWorking(false);
     }
   })();
+  const activeScenarioMission = scenario && missionSummaries.find((item) =>
+    item.command.scenario_id === scenario.config.id
+    && !["completed", "cancelled"].includes(item.execution_state)
+  );
+  const requestCreateMission = () => {
+    if (activeScenarioMission) {
+      setReplaceConfirmOpen(true);
+      return;
+    }
+    setCreateOpen(true);
+  };
   const advanceMission = () => mission && !historyView && run(async () => {
     await api.advanceMission(
       mission.command.id,
@@ -406,8 +430,7 @@ export function MissionDashboard() {
       </> : <>
         <div className="border-b border-cyan-200/10 px-5 py-4"><div className="text-sm font-medium text-cyan-100">{locale === "zh" ? "任务控制" : "Mission Control"}</div><div className="mt-1 text-[10px] tracking-wider text-slate-500">{locale === "zh" ? "时钟、推进、窗口和事件" : "Clock, advancing, windows, and events"}</div></div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4"><section className="panel rounded-2xl p-4">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/[.06] pb-4"><div className="flex flex-wrap items-center gap-3"><Title icon={<Clock3 size={16} />} text={t("controls.mission")} /><span className="font-mono text-xs text-cyan-100">{viewedScenario ? new Date(viewedScenario.clock.simulated_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false }) : "--"}</span><span className={`rounded border px-2 py-1 text-[10px] ${viewedScenario?.clock.paused ? "border-emerald-300/20 text-emerald-300" : "border-orange-300/20 text-orange-300"}`}>{viewedScenario?.clock.paused ? t("controls.paused") : t("controls.running")}</span></div><div className="flex flex-wrap items-center gap-2"><Button onClick={() => setCreateOpen(true)} disabled={!scenario || (!historyView && mission?.execution_state === "running")}><Zap size={14} />{t("actions.newMission")}</Button><Button onClick={advanceMission} active disabled={historyView || !mission?.can_advance || mission?.execution_state === "running" || working}>{mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}{historyView ? historyReadOnlyLabel : mission?.execution_state === "running" ? t("controls.stageRunning") : advanceLabel}</Button></div></div>
-          {historyView && <div className="mb-4 rounded-lg border border-orange-300/25 bg-orange-300/[.06] px-3 py-2 text-xs text-orange-200">{historyReadOnlyLabel}</div>}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/[.06] pb-4"><div className="flex flex-wrap items-center gap-3"><Title icon={<Clock3 size={16} />} text={t("controls.mission")} /><span className="font-mono text-xs text-cyan-100">{viewedScenario ? new Date(viewedScenario.clock.simulated_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false }) : "--"}</span><span className={`rounded border px-2 py-1 text-[10px] ${viewedScenario?.clock.paused ? "border-emerald-300/20 text-emerald-300" : "border-orange-300/20 text-orange-300"}`}>{viewedScenario?.clock.paused ? t("controls.paused") : t("controls.running")}</span></div>{historyView ? <span className="rounded border border-orange-300/25 bg-orange-300/[.06] px-3 py-2 text-xs text-orange-200">{historyReadOnlyLabel}</span> : <Button onClick={advanceMission} active disabled={!mission?.can_advance || mission?.execution_state === "running" || working}>{mission?.execution_state === "running" ? <LoaderCircle size={14} className="animate-spin" /> : <StepForward size={14} />}{mission?.execution_state === "running" ? t("controls.stageRunning") : advanceLabel}</Button>}</div>
           <div className="mb-4 flex items-center justify-between gap-3"><Title icon={<Activity size={16} />} text={t("mission.timeline")} /><span className={`rounded-full border px-2.5 py-1 text-[10px] ${mission?.execution_state === "blocked" ? "border-orange-400/30 text-orange-300" : "border-cyan-300/20 text-cyan-200"}`}>{mission ? `${mission.phase} · ${mission.execution_state}` : t("mission.waiting")}</span></div>
           <div className="overflow-x-auto pb-2"><div className="flex min-w-[700px] items-start">{stages.map(([key, label], index) => <Stage key={key} label={t(label)} complete={mission?.phase === "completed" || index < stageIndex} active={key === mission?.phase} last={index === stages.length - 1} />)}</div></div>
           {mission?.planned_windows && <div className="mt-4 grid gap-2 border-t border-white/[.05] pt-4 sm:grid-cols-3"><Metric label={t("mission.uplinkAos")} value={new Date(mission.planned_windows.uplink.aos).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })} /><Metric label={t("mission.captureAt")} value={new Date(mission.planned_windows.capture.max_elevation_at).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })} /><Metric label={t("mission.downlinkAos")} value={new Date(mission.planned_windows.downlink.aos).toLocaleString(locale === "zh" ? "zh-CN" : "en-US", { hour12: false })} /></div>}
@@ -423,6 +446,7 @@ export function MissionDashboard() {
           <h1 className="text-2xl font-semibold tracking-tight text-slate-50 lg:text-3xl">{t("app.title")}</h1>
           <p className="mt-1 text-xs text-slate-500">{t("app.subtitle")}</p>
         </div>
+        <Button onClick={requestCreateMission} active disabled={!scenario || working}><Zap size={14} />{t("actions.newMission")}</Button>
       </header>
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
@@ -525,12 +549,21 @@ export function MissionDashboard() {
         </section>
 
       </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} activeAiMode={aiMode} gtxLink={config?.links.gtx} locale={locale} />}
+      {replaceConfirmOpen && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="replace-mission-title">
+        <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
+          <h2 id="replace-mission-title" className="text-lg font-medium text-slate-50">{locale === "zh" ? "开始新的观测任务？" : "Start a new observation mission?"}</h2>
+          <p className="mt-3 text-sm leading-6 text-slate-400">{locale === "zh" ? `当前场景的任务“${activeScenarioMission?.command.name ?? ""}”尚未结束。确认后它会被结束并保留为历史记录，新任务将使用当前场景创建。` : `The current scene still has an unfinished mission, “${activeScenarioMission?.command.name ?? ""}”. Confirming will end it, retain it for history, and create the new mission from the active scene.`}</p>
+          <p className="mt-3 text-xs text-slate-500">{locale === "zh" ? "按 Esc 取消。" : "Press Esc to cancel."}</p>
+          <div className="mt-5 flex justify-end gap-2"><Button onClick={() => setReplaceConfirmOpen(false)}>{t("actions.cancel")}</Button><Button onClick={() => { setReplaceConfirmOpen(false); setCreateOpen(true); }} active>{locale === "zh" ? "结束当前任务并继续" : "End current mission and continue"}</Button></div>
+        </div>
+      </div>}
       {createOpen && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
         <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
           <div className="mb-1 text-lg font-medium text-slate-50">{t("mission.createTitle")}</div>
           <p className="mb-5 text-xs leading-5 text-slate-500">{mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("mission.createReplaceDesc") : t("mission.createDesc")}</p>
           <div className="mb-5 rounded-xl border border-cyan-300/20 bg-cyan-300/[.06] p-3 text-xs text-slate-300">{locale === "zh" ? `本任务将使用设置中选择的 ${aiMode.toUpperCase()}。可在 设置 → AI 中切换。` : `This mission will use ${aiMode.toUpperCase()} selected in Settings → AI.`}</div>
           {aiMode === "llm" && <div className="mb-5 space-y-3"><label className="block text-xs text-slate-400">{t("mission.projectContext")}<textarea value={projectContext} onChange={(event) => setProjectContext(event.target.value)} maxLength={4000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.projectPlaceholder")} /></label><label className="block text-xs text-slate-400">{t("mission.analysisPrompt")}<textarea value={analysisPrompt} onChange={(event) => setAnalysisPrompt(event.target.value)} maxLength={2000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.promptPlaceholder")} /></label><p className="text-[10px] leading-4 text-slate-600">{t("mission.llmNotice")}</p></div>}
+          <p className="mb-4 text-[10px] text-slate-600">{locale === "zh" ? "按 Esc 取消。" : "Press Esc to cancel."}</p>
           <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>{t("actions.cancel")}</Button><Button onClick={createMission} active disabled={working}>{working ? t("actions.initRunning") : mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("actions.endAndCreate") : t("actions.initMission")}</Button></div>
         </div>
       </div>}
