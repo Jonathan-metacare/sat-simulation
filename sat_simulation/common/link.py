@@ -50,6 +50,7 @@ def link_code(kind: LinkKind) -> LinkCode:
         LinkKind.GTX: LinkCode.GTX,
         LinkKind.UPLINK: LinkCode.UPLINK,
         LinkKind.DOWNLINK: LinkCode.DOWNLINK,
+        LinkKind.PAYLOAD_BUS: LinkCode.PAYLOAD_BUS,
     }[kind]
 
 
@@ -167,10 +168,14 @@ class TCPTransport:
                     if drop:
                         await self._trace(
                             ProtocolFrameTrace(
-                                transaction_id=str(transfer_id), sequence=sequence,
-                                total=len(chunks), message_type=message_type.name,
-                                payload_bytes=len(chunks[sequence]), simulated_at=self.clock.now(),
-                                attempt=attempt, ack_status="dropped",
+                                transaction_id=str(transfer_id),
+                                sequence=sequence,
+                                total=len(chunks),
+                                message_type=message_type.name,
+                                payload_bytes=len(chunks[sequence]),
+                                simulated_at=self.clock.now(),
+                                attempt=attempt,
+                                ack_status="dropped",
                             )
                         )
                         continue
@@ -198,11 +203,15 @@ class TCPTransport:
                     encoded = frame.encode(corrupt_crc=corrupt)
                     await self._trace(
                         ProtocolFrameTrace(
-                            transaction_id=str(transfer_id), sequence=sequence,
-                            total=len(chunks), message_type=message_type.name,
-                            payload_bytes=len(chunks[sequence]), simulated_at=self.clock.now(),
+                            transaction_id=str(transfer_id),
+                            sequence=sequence,
+                            total=len(chunks),
+                            message_type=message_type.name,
+                            payload_bytes=len(chunks[sequence]),
+                            simulated_at=self.clock.now(),
                             crc32c=f"{crc32c(chunks[sequence]):08x}",
-                            crc_valid=not corrupt, attempt=attempt,
+                            crc_valid=not corrupt,
+                            attempt=attempt,
                             ack_status="crc_error" if corrupt else "sent",
                         )
                     )
@@ -239,9 +248,13 @@ class TCPTransport:
                 missing = {int(item) for item in response.get("missing", [])}
                 await self._trace(
                     ProtocolFrameTrace(
-                        transaction_id=str(transfer_id), sequence=0, total=1,
-                        message_type=reply.message_type.name, payload_bytes=len(reply.payload),
-                        simulated_at=self.clock.now(), attempt=attempt,
+                        transaction_id=str(transfer_id),
+                        sequence=0,
+                        total=1,
+                        message_type=reply.message_type.name,
+                        payload_bytes=len(reply.payload),
+                        simulated_at=self.clock.now(),
+                        attempt=attempt,
                         ack_status="nak" if reply.message_type == MessageType.NAK else "ack",
                         missing_sequences=sorted(missing),
                     )

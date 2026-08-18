@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import rasterio
 from rasterio.shutil import copy as raster_copy
-from rasterio.transform import from_origin
+from rasterio.transform import Affine, from_origin
 
 from sat_simulation.common.models import ProductLevel, ProductManifest
 from sat_simulation.common.protocol import crc32c
@@ -153,7 +153,7 @@ class OpticalPipeline:
         run_id: str,
         mission_id: str,
     ) -> tuple[ProductManifest, Path]:
-        """Reconstruct L0 DN on the platform from received detector RAW packets."""
+        """Reconstruct L0 DN on the optical payload from detector RAW packets."""
         output_dir.mkdir(parents=True, exist_ok=True)
         with rasterio.open(scene_path) as src:
             shape = (src.count, src.height, src.width)
@@ -177,25 +177,59 @@ class OpticalPipeline:
         self,
         *,
         l0_path: Path,
-        scene_path: Path,
-        scene: SceneMetadata,
+        scene_path: Path | None,
+        scene: SceneMetadata | None,
         output_dir: Path,
         run_id: str,
         mission_id: str,
         captured_at: datetime,
         spacecraft_state: dict[str, Any],
         input_manifests: list[ProductManifest] | None = None,
+        raster_context: dict[str, Any] | None = None,
     ) -> OpticalProducts:
         """Generate L1A/L1B/STAC on the GPU payload from L0 plus ancillary state."""
         output_dir.mkdir(parents=True, exist_ok=True)
-        with rasterio.open(scene_path) as src:
-            truth_u16 = src.read().astype(np.uint16)
-            profile = src.profile.copy()
-            transform = src.transform
-            crs = src.crs
-        truth = truth_u16.astype(np.float64) / 65535.0
-        _expected_dn, bad_mask = self._simulate_detector(truth)
         l0 = np.load(l0_path, allow_pickle=False)
+        truth: np.ndarray | None = None
+        if scene_path is not None:
+            with rasterio.open(scene_path) as src:
+                truth_u16 = src.read().astype(np.uint16)
+                profile = src.profile.copy()
+                transform = src.transform
+                crs = src.crs
+            truth = truth_u16.astype(np.float64) / 65535.0
+            _expected_dn, bad_mask = self._simulate_detector(truth)
+        else:
+            if not raster_context:
+                raise ValueError("raster_context is required when scene_path is unavailable")
+            transform = Affine(*list(raster_context["transform"])[:6])
+            crs = raster_context["crs"]
+            profile = {
+                "driver": "GTiff",
+                "width": int(raster_context["width"]),
+                "height": int(raster_context["height"]),
+                "count": int(raster_context["bands"]),
+                "dtype": "uint16",
+                "crs": crs,
+                "transform": transform,
+            }
+            if tuple(l0.shape) != (profile["count"], profile["height"], profile["width"]):
+                raise ValueError("L0 shape does not match frozen raster context")
+            rng = np.random.default_rng(self.sensor.seed)
+            bad_mask = rng.random(l0.shape) < self.sensor.bad_pixel_rate
+            if scene is None:
+                center_x = transform.c + profile["width"] * transform.a / 2
+                center_y = transform.f + profile["height"] * transform.e / 2
+                scene = SceneMetadata(
+                    scene_id=str(raster_context["scene_id"]),
+                    target_name=str(
+                        raster_context.get("target_name") or raster_context["scene_id"]
+                    ),
+                    center_latitude=center_y,
+                    center_longitude=center_x,
+                    pixel_size_deg=abs(transform.a),
+                    crs=str(crs),
+                )
 
         l1a_path = output_dir / f"{mission_id}_l1a.tif"
         l1a_profile = profile | {"dtype": "uint16", "compress": "deflate"}
@@ -240,7 +274,7 @@ class OpticalPipeline:
         self._thumbnail(corrected, thumbnail_path)
         stac_path = output_dir / f"{mission_id}_stac-item.json"
 
-        rmse = float(np.sqrt(np.mean((corrected - truth) ** 2)))
+        rmse = float(np.sqrt(np.mean((corrected - truth) ** 2))) if truth is not None else None
         l0_manifest = self._manifest(
             path=l0_path,
             level=ProductLevel.L0,
@@ -268,7 +302,7 @@ class OpticalPipeline:
                 mission_id=mission_id,
                 lineage=[l1a_path.name],
                 quality={
-                    "truth_rmse": rmse,
+                    **({"truth_rmse": rmse} if rmse is not None else {}),
                     "bad_pixel_count": int(bad_mask.sum()),
                     "processor_node": "gpu",
                     "noise_mode": "disabled"
@@ -286,8 +320,14 @@ class OpticalPipeline:
                 quality={"processor_node": "gpu"},
             ),
         ]
+        if scene is None:
+            raise ValueError("scene metadata is required for STAC generation")
         stac = self._stac_item(
-            scene, captured_at, [*(input_manifests or []), l0_manifest, *manifests], transform, l0.shape
+            scene,
+            captured_at,
+            [*(input_manifests or []), l0_manifest, *manifests],
+            transform,
+            l0.shape,
         )
         stac_path.write_text(json.dumps(stac, ensure_ascii=False, indent=2), encoding="utf-8")
         manifests.append(

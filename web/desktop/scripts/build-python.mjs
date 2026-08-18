@@ -36,6 +36,7 @@ const result = spawnSync(
     // keep their conditional imports explicit in the frozen executable.
     "--hidden-import", "sat_simulation.services.ground",
     "--hidden-import", "sat_simulation.services.platform",
+    "--hidden-import", "sat_simulation.services.optical",
     "--hidden-import", "sat_simulation.services.gpu",
     path.join(projectDirectory, "desktop", "python_service.py"),
   ],

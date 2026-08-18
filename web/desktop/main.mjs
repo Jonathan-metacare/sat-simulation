@@ -97,7 +97,7 @@ async function availablePort() {
 }
 
 async function allocatePorts() {
-  const names = ["ground", "platform", "gpu", "downlink", "uplink", "gtx", "gtxResult", "web"];
+  const names = ["ground", "platform", "optical", "gpu", "downlink", "uplink", "gtx", "gtxResult", "payload", "payloadResult", "web"];
   const ports = {};
   for (const name of names) ports[name] = await availablePort();
   return ports;
@@ -120,6 +120,7 @@ function sharedEnvironment() {
     SAT_SIM_GROUND_API_PORT: String(ports.ground),
     SAT_SIM_PLATFORM_API_PORT: String(ports.platform),
     SAT_SIM_GPU_API_PORT: String(ports.gpu),
+    SAT_SIM_OPTICAL_API_PORT: String(ports.optical),
     SAT_SIM_GROUND_DOWNLINK_HOST: "127.0.0.1",
     SAT_SIM_GROUND_DOWNLINK_PORT: String(ports.downlink),
     SAT_SIM_PLATFORM_UPLINK_HOST: "127.0.0.1",
@@ -128,9 +129,14 @@ function sharedEnvironment() {
     SAT_SIM_GPU_GTX_PORT: String(ports.gtx),
     SAT_SIM_PLATFORM_GTX_RESULT_HOST: "127.0.0.1",
     SAT_SIM_PLATFORM_GTX_RESULT_PORT: String(ports.gtxResult),
+    SAT_SIM_OPTICAL_PAYLOAD_HOST: "127.0.0.1",
+    SAT_SIM_OPTICAL_PAYLOAD_PORT: String(ports.payload),
+    SAT_SIM_PLATFORM_PAYLOAD_RESULT_HOST: "127.0.0.1",
+    SAT_SIM_PLATFORM_PAYLOAD_RESULT_PORT: String(ports.payloadResult),
     SAT_SIM_PLATFORM_HTTP_URL: `http://127.0.0.1:${ports.platform}`,
     SAT_SIM_GPU_HTTP_URL: `http://127.0.0.1:${ports.gpu}`,
     SAT_SIM_GROUND_HTTP_URL: `http://127.0.0.1:${ports.ground}`,
+    SAT_SIM_OPTICAL_HTTP_URL: `http://127.0.0.1:${ports.optical}`,
     SAT_SIM_LLM_API_URL: settings.activeAiMode === "llm" ? settings.llmApiUrl : "",
     SAT_SIM_LLM_MODEL: settings.llmModel,
     SAT_SIM_LLM_API_KEY: settings.activeAiMode === "llm" ? settings.llmApiKey : "",
@@ -309,7 +315,7 @@ async function stopProcess(name) {
 }
 
 async function stopStack() {
-  for (const name of ["web", "ground", "platform", "gpu"]) await stopProcess(name);
+  for (const name of ["web", "ground", "platform", "optical", "gpu"]) await stopProcess(name);
 }
 
 async function startStack() {
@@ -321,11 +327,13 @@ async function startStack() {
   // runtimes together: the first import of Rasterio/GDAL can take tens of
   // seconds on macOS, but it must not serialize the whole desktop startup.
   startService("gpu", runtime.ports.gpu);
+  startService("optical", runtime.ports.optical);
   startService("platform", runtime.ports.platform);
   startService("ground", runtime.ports.ground);
   await Promise.all([
     waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务"),
     waitFor(`http://127.0.0.1:${runtime.ports.platform}/health`, "星务平台服务"),
+    waitFor(`http://127.0.0.1:${runtime.ports.optical}/health`, "光学载荷服务"),
     waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务"),
   ]);
   startWeb();
@@ -340,7 +348,7 @@ function diagnostics() {
     ports: runtime?.ports ?? {},
     dataDirectory: locations.root,
     logDirectory: locations.logs,
-    services: ["gpu", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: processes.has(name) })),
+    services: ["gpu", "optical", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: processes.has(name) })),
   };
 }
 

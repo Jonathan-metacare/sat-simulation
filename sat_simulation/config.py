@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ground_api_port: int = 8000
     platform_api_port: int = 8001
     gpu_api_port: int = 8002
+    optical_api_port: int = 8003
     ground_downlink_host: str = "127.0.0.1"
     ground_downlink_port: int = 9201
     platform_uplink_host: str = "127.0.0.1"
@@ -23,9 +24,16 @@ class Settings(BaseSettings):
     gpu_gtx_port: int = 9101
     platform_gtx_result_host: str = "127.0.0.1"
     platform_gtx_result_port: int = 9102
+    optical_payload_host: str = "127.0.0.1"
+    optical_payload_port: int = 9300
+    platform_payload_result_host: str = "127.0.0.1"
+    platform_payload_result_port: int = 9301
     platform_http_url: str = "http://127.0.0.1:8001"
     gpu_http_url: str = "http://127.0.0.1:8002"
     ground_http_url: str = "http://127.0.0.1:8000"
+    optical_http_url: str = "http://127.0.0.1:8003"
+    oci_runtime: str = "docker"
+    processor_image: str = "spacezenith/processor-python:3.12"
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     yolo_api_url: str | None = None
     yolo_model: str = "default"

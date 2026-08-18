@@ -1,4 +1,4 @@
-import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioConfig, ScenarioRecord, TransferRecord } from "./types";
+import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProcessorStage, ProcessorVersion, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioConfig, ScenarioRecord, SceneAsset, SceneRecord, TransferRecord } from "./types";
 import { desktopBridge } from "./desktop";
 
 export const API_BASE = (desktopBridge()?.apiBase ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
@@ -20,13 +20,25 @@ async function upload<T>(path: string, file: File): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function uploadWithFields<T>(path: string, file: File, fields: Record<string, string | number | undefined>): Promise<T> {
+  const query = new URLSearchParams();
+  Object.entries(fields).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
+  return upload<T>(`${path}?${query.toString()}`, file);
+}
+
 export const api = {
   config:()=>request<PublicConfig>("/config"),
   scenarios:()=>request<ScenarioRecord[]>("/scenarios"),
   orbit:(scenarioId:string)=>request<OrbitTrack>(`/scenarios/${scenarioId}/orbit`),
   createScenario:()=>request<ScenarioRecord>("/scenarios",{method:"POST",body:JSON.stringify({name:"北京光学任务演示",clock_rate:10})}),
   importScenarioYaml:(file:File)=>upload<{config:ScenarioConfig;clock:ScenarioRecord["clock"];validation:{status:string;scene_ready:boolean;required_scene_id:string}}>("/scenarios/import/yaml",file),
-  importScene:(file:File,sceneId:string,scenarioId?:string)=>upload<{id:string;sha256:string;metadata:Record<string,unknown>;scene_ready:boolean}>(`/scenes/import?scene_id=${encodeURIComponent(sceneId)}${scenarioId?`&scenario_id=${encodeURIComponent(scenarioId)}`:""}`,file),
+  validateScene:(file:File,sceneId:string,geo?:{centerLatitude?:number;centerLongitude?:number;pixelSize?:number;crs?:string})=>uploadWithFields<{status:string;asset:SceneAsset}>("/scenes/validate",file,{scene_id:sceneId,center_latitude:geo?.centerLatitude,center_longitude:geo?.centerLongitude,pixel_size:geo?.pixelSize,crs:geo?.crs}),
+  importScene:(file:File,sceneId:string,scenarioId?:string,geo?:{centerLatitude?:number;centerLongitude?:number;pixelSize?:number;crs?:string})=>uploadWithFields<{id:string;sha256:string;metadata:SceneAsset;scene_ready:boolean}>("/scenes/import",file,{scene_id:sceneId,scenario_id:scenarioId,center_latitude:geo?.centerLatitude,center_longitude:geo?.centerLongitude,pixel_size:geo?.pixelSize,crs:geo?.crs}),
+  scenes:()=>request<SceneRecord[]>("/scenes"),
+  validateProcessor:(file:File)=>upload<{status:string;definition:ProcessorVersion["definition"];sha256:string}>("/processors/validate",file),
+  importProcessor:(file:File)=>upload<ProcessorVersion>("/processors",file),
+  processors:(stage?:ProcessorStage)=>request<ProcessorVersion[]>(`/processors${stage?`?stage=${stage}`:""}`),
+  selectProcessors:(scenarioId:string,l0ProcessorId:string,l1ProcessorId:string)=>request<ScenarioConfig>(`/scenarios/${scenarioId}/processors`,{method:"POST",body:JSON.stringify({l0_processor_id:l0ProcessorId,l1_processor_id:l1ProcessorId})}),
   control:(id:string,action:string,rate?:number)=>request<{clock:ScenarioRecord["clock"]}>(`/scenarios/${id}/control`,{method:"POST",body:JSON.stringify({action,rate})}),
   missions:()=>request<MissionSummary[]>("/missions"),
   mission:(id:string)=>request<MissionDetail>(`/missions/${id}`),

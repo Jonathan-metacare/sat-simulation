@@ -55,6 +55,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenes/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Scene */
+        post: operations["validate_scene_api_scenes_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenes/import": {
         parameters: {
             query?: never;
@@ -66,6 +83,109 @@ export interface paths {
         put?: never;
         /** Import Scene */
         post: operations["import_scene_api_scenes_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Scenes */
+        get: operations["list_scenes_api_scenes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/processors/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Processor */
+        post: operations["validate_processor_api_processors_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/processor-executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Processor Execution */
+        post: operations["record_processor_execution_internal_processor_executions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/processors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Processors */
+        get: operations["list_processors_api_processors_get"];
+        put?: never;
+        /** Import Processor */
+        post: operations["import_processor_api_processors_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/processors/{processor_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Processor */
+        get: operations["get_processor_api_processors__processor_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenarios/{scenario_id}/processors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Processors */
+        post: operations["select_processors_api_scenarios__scenario_id__processors_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -441,6 +561,11 @@ export interface components {
          * @enum {string}
          */
         AIMode: "yolo" | "llm";
+        /** Body_import_processor_api_processors_post */
+        Body_import_processor_api_processors_post: {
+            /** File */
+            file: string;
+        };
         /** Body_import_scenario_yaml_api_scenarios_import_yaml_post */
         Body_import_scenario_yaml_api_scenarios_import_yaml_post: {
             /** File */
@@ -448,6 +573,16 @@ export interface components {
         };
         /** Body_import_scene_api_scenes_import_post */
         Body_import_scene_api_scenes_import_post: {
+            /** File */
+            file: string;
+        };
+        /** Body_validate_processor_api_processors_validate_post */
+        Body_validate_processor_api_processors_validate_post: {
+            /** File */
+            file: string;
+        };
+        /** Body_validate_scene_api_scenes_validate_post */
+        Body_validate_scene_api_scenes_validate_post: {
             /** File */
             file: string;
         };
@@ -531,7 +666,7 @@ export interface components {
          * LinkKind
          * @enum {string}
          */
-        LinkKind: "gtx" | "uplink" | "downlink";
+        LinkKind: "gtx" | "uplink" | "downlink" | "payload_bus";
         /** LinkProfile */
         LinkProfile: {
             kind: components["schemas"]["LinkKind"];
@@ -609,6 +744,25 @@ export interface components {
              * @default demo-optical-scene
              */
             scene_id: string;
+            /** Scene Asset Id */
+            scene_asset_id?: string | null;
+            scene_asset?: components["schemas"]["SceneAsset"] | null;
+            /**
+             * L0 Processor Id
+             * @default builtin-l0
+             */
+            l0_processor_id: string;
+            /**
+             * L1 Processor Id
+             * @default builtin-l1
+             */
+            l1_processor_id: string;
+            /** Processor Snapshots */
+            processor_snapshots?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
             /**
              * Enable Ai
              * @default true
@@ -872,6 +1026,118 @@ export interface components {
             minimum_elevation_deg: number;
         };
         /**
+         * ProcessorDefinition
+         * @description Strict manifest embedded in an uploaded processor bundle.
+         */
+        ProcessorDefinition: {
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+            stage: components["schemas"]["ProcessorStage"];
+            /** Entrypoint */
+            entrypoint: string;
+            /**
+             * Timeout Seconds
+             * @default 120
+             */
+            timeout_seconds: number;
+            /**
+             * Cpu Limit
+             * @default 1
+             */
+            cpu_limit: number;
+            /**
+             * Memory Mb
+             * @default 1024
+             */
+            memory_mb: number;
+            /**
+             * Output Limit Mb
+             * @default 1024
+             */
+            output_limit_mb: number;
+        };
+        /** ProcessorExecution */
+        ProcessorExecution: {
+            /** Id */
+            id?: string;
+            /** Mission Id */
+            mission_id: string;
+            /** Processor Id */
+            processor_id: string;
+            stage: components["schemas"]["ProcessorStage"];
+            /** @default running */
+            status: components["schemas"]["ProcessorRuntimeStatus"];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at?: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Error */
+            error?: string | null;
+            /** Input Summary */
+            input_summary?: {
+                [key: string]: unknown;
+            };
+            /** Output Summary */
+            output_summary?: {
+                [key: string]: unknown;
+            };
+            /** Resource Limits */
+            resource_limits?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Stdout
+             * @default
+             */
+            stdout: string;
+            /**
+             * Stderr
+             * @default
+             */
+            stderr: string;
+        };
+        /**
+         * ProcessorRuntimeStatus
+         * @enum {string}
+         */
+        ProcessorRuntimeStatus: "builtin" | "ready" | "unavailable" | "running" | "completed" | "failed";
+        /**
+         * ProcessorStage
+         * @enum {string}
+         */
+        ProcessorStage: "l0" | "l1";
+        /** ProcessorVersion */
+        ProcessorVersion: {
+            /** Id */
+            id?: string;
+            definition: components["schemas"]["ProcessorDefinition"];
+            /** Sha256 */
+            sha256: string;
+            /** Bundle Path */
+            bundle_path?: string | null;
+            /** @default ready */
+            runtime_status: components["schemas"]["ProcessorRuntimeStatus"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at?: string;
+        };
+        /**
          * ProductLevel
          * @enum {string}
          */
@@ -1113,6 +1379,18 @@ export interface components {
              * @default demo-optical-scene
              */
             scene_id: string;
+            /** Scene Asset Id */
+            scene_asset_id?: string | null;
+            /**
+             * L0 Processor Id
+             * @default builtin-l0
+             */
+            l0_processor_id: string;
+            /**
+             * L1 Processor Id
+             * @default builtin-l1
+             */
+            l1_processor_id: string;
             /**
              * Scene Ready
              * @default true
@@ -1134,6 +1412,60 @@ export interface components {
              * @default 1
              */
             step_seconds: number;
+        };
+        /** SceneAsset */
+        SceneAsset: {
+            /** Id */
+            id?: string;
+            /** Scene Id */
+            scene_id: string;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /** Source Name */
+            source_name: string;
+            /** Source Mime Type */
+            source_mime_type: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Canonical Sha256 */
+            canonical_sha256: string;
+            /** Width */
+            width: number;
+            /** Height */
+            height: number;
+            /** Bands */
+            bands: number;
+            /**
+             * Dtype
+             * @default uint16
+             */
+            dtype: string;
+            /** Crs */
+            crs: string;
+            /** Transform */
+            transform: [
+                number,
+                number,
+                number,
+                number,
+                number,
+                number,
+                number,
+                number,
+                number
+            ];
+            /** Conversion */
+            conversion?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at?: string;
         };
         /**
          * SensorSettings
@@ -1366,11 +1698,56 @@ export interface operations {
             };
         };
     };
+    validate_scene_api_scenes_validate_post: {
+        parameters: {
+            query: {
+                scene_id: string;
+                center_latitude?: number | null;
+                center_longitude?: number | null;
+                pixel_size?: number | null;
+                crs?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_validate_scene_api_scenes_validate_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     import_scene_api_scenes_import_post: {
         parameters: {
             query: {
                 scene_id: string;
                 scenario_id?: string | null;
+                center_latitude?: number | null;
+                center_longitude?: number | null;
+                pixel_size?: number | null;
+                crs?: string;
             };
             header?: never;
             path?: never;
@@ -1391,6 +1768,226 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_scenes_api_scenes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    validate_processor_api_processors_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_validate_processor_api_processors_validate_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_processor_execution_internal_processor_executions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProcessorExecution"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_processors_api_processors_get: {
+        parameters: {
+            query?: {
+                stage?: components["schemas"]["ProcessorStage"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessorVersion"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_processor_api_processors_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_processor_api_processors_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessorVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_processor_api_processors__processor_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                processor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessorVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_processors_api_scenarios__scenario_id__processors_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scenario_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioConfig"];
                 };
             };
             /** @description Validation Error */

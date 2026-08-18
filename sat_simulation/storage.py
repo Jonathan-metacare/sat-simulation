@@ -24,6 +24,8 @@ from sat_simulation.common.models import (
     MissionPhase,
     MissionStatus,
     MissionStepAttempt,
+    ProcessorExecution,
+    ProcessorVersion,
     ProductManifest,
     ProtocolFrameTrace,
     ProtocolTransaction,
@@ -160,6 +162,27 @@ class SceneRow(Base):
     path: Mapped[str] = mapped_column(Text)
     sha256: Mapped[str] = mapped_column(String(64))
     metadata_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ProcessorVersionRow(Base):
+    __tablename__ = "simulation_processor_versions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    definition_id: Mapped[str] = mapped_column(String(80), index=True)
+    stage: Mapped[str] = mapped_column(String(20), index=True)
+    sha256: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    version_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ProcessorExecutionRow(Base):
+    __tablename__ = "simulation_processor_executions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(String(80), index=True)
+    processor_id: Mapped[str] = mapped_column(String(80), index=True)
+    stage: Mapped[str] = mapped_column(String(20), index=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    execution_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
@@ -704,5 +727,105 @@ class Repository:
                         path=path,
                         sha256=sha256,
                         metadata_json=json.dumps(metadata),
+                    )
+                )
+
+    async def list_scenes(self) -> list[dict[str, Any]]:
+        async with self.session() as session:
+            rows = (
+                await session.scalars(select(SceneRow).order_by(SceneRow.created_at.desc()))
+            ).all()
+            return [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "path": row.path,
+                    "sha256": row.sha256,
+                    "metadata": json.loads(row.metadata_json),
+                    "created_at": row.created_at,
+                }
+                for row in rows
+            ]
+
+    async def get_scene(self, scene_id: str) -> dict[str, Any] | None:
+        async with self.session() as session:
+            row = await session.get(SceneRow, scene_id)
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "name": row.name,
+                "path": row.path,
+                "sha256": row.sha256,
+                "metadata": json.loads(row.metadata_json),
+                "created_at": row.created_at,
+            }
+
+    async def add_processor(self, processor: ProcessorVersion) -> ProcessorVersion:
+        async with self.session() as session:
+            existing = await session.scalar(
+                select(ProcessorVersionRow).where(ProcessorVersionRow.sha256 == processor.sha256)
+            )
+            if existing:
+                return ProcessorVersion.model_validate_json(existing.version_json)
+            session.add(
+                ProcessorVersionRow(
+                    id=processor.id,
+                    definition_id=processor.definition.id,
+                    stage=processor.definition.stage,
+                    sha256=processor.sha256,
+                    version_json=processor.model_dump_json(),
+                )
+            )
+        return processor
+
+    async def list_processors(self, stage: str | None = None) -> list[ProcessorVersion]:
+        async with self.session() as session:
+            query = select(ProcessorVersionRow).order_by(ProcessorVersionRow.created_at.desc())
+            if stage:
+                query = query.where(ProcessorVersionRow.stage == stage)
+            rows = (await session.scalars(query)).all()
+            return [ProcessorVersion.model_validate_json(row.version_json) for row in rows]
+
+    async def get_processor(self, processor_id: str) -> ProcessorVersion | None:
+        async with self.session() as session:
+            row = await session.get(ProcessorVersionRow, processor_id)
+            return ProcessorVersion.model_validate_json(row.version_json) if row else None
+
+    async def add_processor_execution(self, execution: ProcessorExecution) -> None:
+        async with self.session() as session:
+            session.add(
+                ProcessorExecutionRow(
+                    id=execution.id,
+                    mission_id=execution.mission_id,
+                    processor_id=execution.processor_id,
+                    stage=execution.stage,
+                    status=execution.status,
+                    execution_json=execution.model_dump_json(),
+                )
+            )
+
+    async def update_processor_execution(self, execution: ProcessorExecution) -> None:
+        async with self.session() as session:
+            row = await session.get(ProcessorExecutionRow, execution.id)
+            if row:
+                row.status = execution.status
+                row.execution_json = execution.model_dump_json()
+
+    async def upsert_processor_execution(self, execution: ProcessorExecution) -> None:
+        async with self.session() as session:
+            row = await session.get(ProcessorExecutionRow, execution.id)
+            if row:
+                row.status = execution.status
+                row.execution_json = execution.model_dump_json()
+            else:
+                session.add(
+                    ProcessorExecutionRow(
+                        id=execution.id,
+                        mission_id=execution.mission_id,
+                        processor_id=execution.processor_id,
+                        stage=execution.stage,
+                        status=execution.status,
+                        execution_json=execution.model_dump_json(),
                     )
                 )

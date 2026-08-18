@@ -1,8 +1,11 @@
 # SpaceZenith-Sim 桌面版
 
-The desktop build embeds the Ground, Platform and GPU services inside one
+The desktop build embeds the Ground, Platform, Optical and GPU services inside one
 Electron application. It binds every service to `127.0.0.1`, creates its own
 ports per launch, and does not require Docker or a system Python installation.
+This statement applies to the built-in L0/L1 pipeline. Customer ZIP processors
+still require a separately installed Docker-compatible OCI runtime and the
+processor runtime image described in `docs/PROCESSOR_SDK.md`.
 
 ## Development
 
@@ -15,7 +18,7 @@ pnpm install
 pnpm desktop:dev
 ```
 
-`desktop:dev` launches the three services from the repository virtual
+`desktop:dev` launches the four services from the repository virtual
 environment and a local Next.js dev server. The app uses a temporary set of
 localhost ports, so it can run alongside the normal multi-terminal setup.
 
@@ -56,7 +59,7 @@ pnpm desktop:dist:win
 可能显示未知发布者提示。升级安装会保留用户的本地任务、场景、SQLite、Cesium Token
 和 AI Provider 设置。
 
-Windows 运行时不需要 Docker、系统 Python 或本地模型。它会启动嵌入的 Ground、Platform、
+Windows 运行时不需要系统 Python 或本地模型。它会启动嵌入的 Ground、Platform、Optical、
 GPU 和 Web 服务，所有端口仅绑定 `127.0.0.1`。Ollama/YOLO 仍是用户可选的外部服务。
 
 Windows 用户数据、日志和设置由 Electron 存入标准 `%APPDATA%\\SpaceZenith-Sim\\`

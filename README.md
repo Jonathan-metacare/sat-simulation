@@ -11,12 +11,13 @@ HTTP 适配器，未配置时第五步阻塞，不生成虚假模型结果。
 
 ```text
 Next.js Web -> Ground API --SIMF uplink--> Platform Node
-                                      Platform Node --Virtual GTX--> GPU Node
+                                      |--Payload Bus--> Optical Node --RAW/L0-->
+                                      |--Virtual GTX--> GPU/Jetson Node --L1/AI-->
 Next.js Web <- Ground API <--SIMF downlink-- Platform Node
 ```
 
-- 地面站是唯一公开 API；星务和 GPU 只开放容器网络中的健康/管理接口。
-- 星务、GPU、地面各有独立数据卷，产品必须经过 TCP 分帧链路逐字节传输。
+- 地面站是唯一公开 API；星务、光学和 GPU 只开放内部健康/管理接口。
+- Ground、Platform、Optical、GPU 各有独立数据卷，产品必须经过 TCP 分帧链路逐字节传输。
 - GTX 模拟数据格式、带宽、时延、背压、CRC、丢帧和恢复，不模拟 PHY/SerDes。
 - 数传采用 CCSDS Space Packet、TC/AOS、CFDP 语义对齐子集，不声明标准一致性。
 - 场景 TLE、传感器参数、链路参数和随机 seed 都是版本化配置。
@@ -37,7 +38,7 @@ docker compose up --build
 
 ## 桌面版（macOS 与 Windows）
 
-Electron 桌面版会在一个 App 内自动启动 Ground、Platform、GPU 与 Web，首版目标为
+Electron 桌面版会在一个 App 内自动启动 Ground、Platform、Optical、GPU 与 Web，首版目标为
 Apple Silicon macOS 与 Windows 10/11 x64。开发和打包说明见
 [docs/DESKTOP.md](docs/DESKTOP.md)。Windows 安装程序须在 Windows x64 本机构建：
 
@@ -62,12 +63,13 @@ cd web && pnpm install && cd ..
 uv run alembic upgrade head
 ```
 
-按顺序启动四个终端：
+按顺序启动五个终端：
 
 ```bash
 SAT_SIM_DATA_DIR=runtime-data/gpu SAT_SIM_GROUND_HTTP_URL=http://127.0.0.1:8000 uv run uvicorn sat_simulation.services.gpu:app --port 8002
+SAT_SIM_DATA_DIR=runtime-data/optical SAT_SIM_GROUND_HTTP_URL=http://127.0.0.1:8000 SAT_SIM_PLATFORM_PAYLOAD_RESULT_HOST=127.0.0.1 uv run uvicorn sat_simulation.services.optical:app --port 8003
 SAT_SIM_DATA_DIR=runtime-data/ground SAT_SIM_PLATFORM_UPLINK_HOST=127.0.0.1 SAT_SIM_PLATFORM_HTTP_URL=http://127.0.0.1:8001 SAT_SIM_GPU_HTTP_URL=http://127.0.0.1:8002 uv run uvicorn sat_simulation.services.ground:app --port 8000
-SAT_SIM_DATA_DIR=runtime-data/platform SAT_SIM_GROUND_DOWNLINK_HOST=127.0.0.1 SAT_SIM_GROUND_HTTP_URL=http://127.0.0.1:8000 SAT_SIM_GPU_GTX_HOST=127.0.0.1 uv run uvicorn sat_simulation.services.platform:app --port 8001
+SAT_SIM_DATA_DIR=runtime-data/platform SAT_SIM_GROUND_DOWNLINK_HOST=127.0.0.1 SAT_SIM_GROUND_HTTP_URL=http://127.0.0.1:8000 SAT_SIM_GPU_GTX_HOST=127.0.0.1 SAT_SIM_OPTICAL_PAYLOAD_HOST=127.0.0.1 uv run uvicorn sat_simulation.services.platform:app --port 8001
 cd web && pnpm dev
 ```
 
@@ -79,7 +81,8 @@ uv run python scripts/demo_mission.py
 
 ## 主要公共 API
 
-- `POST /api/scenes/import`：导入并预置 16-bit GeoTIFF。
+- `POST /api/scenes/validate|import`：预检并导入 GeoTIFF/PNG/JPEG 光学输入。
+- `POST/GET /api/processors`：严格校验、注册和选择 Python 3.12 ZIP 处理器。
 - `POST/GET /api/scenarios`：创建或查看版本化场景。
 - `POST /api/scenarios/{id}/control`：运行、暂停、单步、倍率和新 run。
 - `POST/GET /api/missions`、`GET /api/missions/{id}`：任务与完整事件/产品。
@@ -116,9 +119,10 @@ Provider 阻塞真实性、步骤幂等性和持久化重试状态。
 ## 目录
 
 - `sat_simulation/common`：时钟、协议、链路、轨姿和公共模型。
-- `sat_simulation/optical`：确定性场景与 RAW/L0/L1A/L1B/STAC。
+- `sat_simulation/optical`：场景校验、探测器 RAW 与内置产品处理。
+- `sat_simulation/processors`：自定义处理器 ZIP SDK 校验和 OCI 沙箱运行器。
 - `sat_simulation/payload`：检测与语言 Provider 契约。
-- `sat_simulation/services`：ground、platform、GPU 三个进程。
+- `sat_simulation/services`：ground、platform、optical、GPU 四个独立节点进程。
 - `web`：Next.js/Cesium 地面站。
 - `migrations`：PostgreSQL/SQLite Alembic 迁移。
 - `scenarios`：版本化演示参数。
@@ -131,4 +135,4 @@ Provider 阻塞真实性、步骤幂等性和持久化重试状态。
 - 不包含完整传感器物理、GTX 电气特性、RF 物理层、安全加固或 CCSDS 认证。
 
 详见 [架构](docs/ARCHITECTURE.md)、[协议 ICD](docs/PROTOCOL.md)、
-[光学产品](docs/PRODUCTS.md) 和 [运行手册](docs/OPERATIONS.md)。
+[光学产品](docs/PRODUCTS.md)、[处理器 SDK](docs/PROCESSOR_SDK.md) 和 [运行手册](docs/OPERATIONS.md)。

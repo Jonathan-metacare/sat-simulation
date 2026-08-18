@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from zipfile import BadZipFile
 from typing import Any
+from zipfile import BadZipFile
 
 from sat_simulation.common.models import ProtocolPayloadView
 from sat_simulation.common.protocol import MessageType
@@ -102,6 +102,22 @@ def describe_payload(message_type: MessageType, payload: bytes) -> ProtocolPaylo
                 },
             )
         except (BadZipFile, KeyError, ValueError, OSError):
+            pass
+    if message_type in {MessageType.RAW_PRODUCT, MessageType.L0_PRODUCT}:
+        try:
+            manifest, content = unpack_product(payload)
+            return ProtocolPayloadView(
+                kind="binary",
+                mime_type=manifest.mime_type,
+                summary={
+                    "envelope": "ProductEnvelope/1",
+                    "name": manifest.name,
+                    "level": manifest.level,
+                    "content_bytes": len(content),
+                    "sha256": manifest.sha256,
+                },
+            )
+        except ValueError:
             pass
     return ProtocolPayloadView(
         kind="binary" if payload else "none",

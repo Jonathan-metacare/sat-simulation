@@ -77,6 +77,7 @@ class LinkKind(StrEnum):
     GTX = "gtx"
     UPLINK = "uplink"
     DOWNLINK = "downlink"
+    PAYLOAD_BUS = "payload_bus"
 
 
 class NodeKind(StrEnum):
@@ -97,6 +98,81 @@ class ProtocolTransactionStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class ProcessorStage(StrEnum):
+    L0 = "l0"
+    L1 = "l1"
+
+
+class ProcessorRuntimeStatus(StrEnum):
+    BUILTIN = "builtin"
+    READY = "ready"
+    UNAVAILABLE = "unavailable"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ProcessorDefinition(BaseModel):
+    """Strict manifest embedded in an uploaded processor bundle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,79}$")
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=40)
+    stage: ProcessorStage
+    entrypoint: str = Field(min_length=3, max_length=240)
+    timeout_seconds: int = Field(default=120, ge=1, le=3600)
+    cpu_limit: float = Field(default=1.0, gt=0, le=16)
+    memory_mb: int = Field(default=1024, ge=128, le=32768)
+    output_limit_mb: int = Field(default=1024, ge=1, le=16384)
+
+
+class ProcessorVersion(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("processor"))
+    definition: ProcessorDefinition
+    sha256: str = Field(min_length=64, max_length=64)
+    bundle_path: str | None = None
+    runtime_status: ProcessorRuntimeStatus = ProcessorRuntimeStatus.READY
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ProcessorExecution(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("execution"))
+    mission_id: str
+    processor_id: str
+    stage: ProcessorStage
+    status: ProcessorRuntimeStatus = ProcessorRuntimeStatus.RUNNING
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: datetime | None = None
+    exit_code: int | None = None
+    error: str | None = None
+    input_summary: dict[str, Any] = Field(default_factory=dict)
+    output_summary: dict[str, Any] = Field(default_factory=dict)
+    resource_limits: dict[str, Any] = Field(default_factory=dict)
+    stdout: str = ""
+    stderr: str = ""
+
+
+class SceneAsset(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("scene_asset"))
+    scene_id: str
+    version: int = Field(default=1, ge=1)
+    source_name: str
+    source_mime_type: str
+    source_sha256: str = Field(min_length=64, max_length=64)
+    canonical_sha256: str = Field(min_length=64, max_length=64)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    bands: int = Field(gt=0, le=16)
+    dtype: str = "uint16"
+    crs: str
+    transform: tuple[float, float, float, float, float, float, float, float, float]
+    conversion: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class SimulationClockState(BaseModel):
@@ -136,6 +212,11 @@ def default_link_profiles() -> dict[LinkKind, LinkProfile]:
             latency_ms=20,
             frame_payload_bytes=4096,
         ),
+        LinkKind.PAYLOAD_BUS: LinkProfile(
+            kind=LinkKind.PAYLOAD_BUS,
+            bandwidth_bps=1e9,
+            latency_ms=0.1,
+        ),
     }
 
 
@@ -170,6 +251,9 @@ class ScenarioConfig(BaseModel):
     ground_station_altitude_m: float = Field(default=50.0, ge=-1000, le=100000)
     deterministic_contact: bool = True
     scene_id: str = "demo-optical-scene"
+    scene_asset_id: str | None = None
+    l0_processor_id: str = "builtin-l0"
+    l1_processor_id: str = "builtin-l1"
     scene_ready: bool = True
     links: dict[LinkKind, LinkProfile] = Field(default_factory=default_link_profiles)
     sensor: SensorSettings = Field(default_factory=SensorSettings)
@@ -245,11 +329,14 @@ class MissionCommand(BaseModel):
     target_longitude: float = Field(default=116.4074, ge=-180, le=180)
     requested_at: datetime = Field(default_factory=utc_now)
     scene_id: str = "demo-optical-scene"
+    scene_asset_id: str | None = None
+    scene_asset: SceneAsset | None = None
+    l0_processor_id: str = "builtin-l0"
+    l1_processor_id: str = "builtin-l1"
+    processor_snapshots: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_ai: bool = True
     ai_mode: AIMode = AIMode.YOLO
-    project_context: str = Field(
-        default="SpaceZenith-Sim 光学观测任务", max_length=4000
-    )
+    project_context: str = Field(default="SpaceZenith-Sim 光学观测任务", max_length=4000)
     analysis_prompt: str = Field(
         default="识别图像中的主要地物、目标和异常，说明判断依据与不确定性。",
         max_length=2000,
@@ -267,9 +354,7 @@ class MissionCreate(BaseModel):
     scene_id: str = "demo-optical-scene"
     enable_ai: bool = True
     ai_mode: AIMode = AIMode.YOLO
-    project_context: str = Field(
-        default="SpaceZenith-Sim 光学观测任务", max_length=4000
-    )
+    project_context: str = Field(default="SpaceZenith-Sim 光学观测任务", max_length=4000)
     analysis_prompt: str = Field(
         default="识别图像中的主要地物、目标和异常，说明判断依据与不确定性。",
         max_length=2000,

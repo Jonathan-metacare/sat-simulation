@@ -548,7 +548,7 @@ export function MissionDashboard() {
           </div>
         </section>
 
-      </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} activeAiMode={aiMode} gtxLink={config?.links.gtx} locale={locale} />}
+      </> : <NodeTab node={activeTab} mission={mission} providerHealth={providerHealth} activeAiMode={aiMode} gtxLink={config?.links.gtx} scenario={scenario?.config} onConfigurationChanged={() => void reload(mission?.command.id)} locale={locale} />}
       {replaceConfirmOpen && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="replace-mission-title">
         <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
           <h2 id="replace-mission-title" className="text-lg font-medium text-slate-50">{locale === "zh" ? "开始新的观测任务？" : "Start a new observation mission?"}</h2>

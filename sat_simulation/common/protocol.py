@@ -18,6 +18,7 @@ class LinkCode(IntEnum):
     GTX = 1
     UPLINK = 2
     DOWNLINK = 3
+    PAYLOAD_BUS = 4
 
 
 class MessageType(IntEnum):
@@ -35,6 +36,10 @@ class MessageType(IntEnum):
     RESULT_PACKAGE = 12
     L1_PRODUCTS = 13
     L1_JOB = 14
+    CAPTURE_REQUEST = 15
+    RAW_PRODUCT = 16
+    L0_PROCESS_REQUEST = 17
+    L0_PRODUCT = 18
 
 
 def crc32c(data: bytes, crc: int = 0) -> int:

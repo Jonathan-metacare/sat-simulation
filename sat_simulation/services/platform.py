@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import zipfile
@@ -10,8 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import rasterio
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from sat_simulation import __version__
@@ -29,43 +27,35 @@ from sat_simulation.common.models import (
     ProductLevel,
     ProductManifest,
     ProtocolFrameTrace,
-    ProtocolLinkKind,
-    ProtocolPayloadView,
     ProtocolTransaction,
-    ProtocolTransactionStatus,
     ScenarioConfig,
     TransferRecord,
     TransferStatus,
     utc_now,
 )
 from sat_simulation.common.orbit import target_attitude
-from sat_simulation.common.protocol import Frame, MessageType, crc32c
+from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import (
     pack_json,
     pack_product,
     pack_product_bundle,
     unpack_json,
+    unpack_product,
     unpack_product_bundle,
 )
 from sat_simulation.config import Settings, settings
-from sat_simulation.optical.pipeline import (
-    OpticalPipeline,
-    SceneMetadata,
-    SensorConfig,
-    ensure_demo_scene,
-    sha256_file,
-)
+from sat_simulation.optical.pipeline import sha256_file
 
 
 class PlatformState:
     def __init__(self, app_settings: Settings) -> None:
         self.settings = app_settings
         self.data_dir = app_settings.data_dir / "platform"
-        self.scene_dir = self.data_dir / "scenes"
         self.product_dir = self.data_dir / "products"
         self.task_dir = self.data_dir / "tasks"
         self.uplink_receiver = TCPReceiver(self.handle_uplink)
         self.result_receiver = TCPReceiver(self.handle_gtx_result)
+        self.payload_result_receiver = TCPReceiver(self.handle_payload_result)
         self.missions: dict[str, dict[str, Any]] = {}
 
     async def report_trace(self, value: ProtocolTransaction | ProtocolFrameTrace) -> None:
@@ -83,59 +73,9 @@ class PlatformState:
         except Exception:
             return
 
-    async def report_optical_bus(
-        self, command: MissionCommand, manifest: ProductManifest, simulated_at: datetime
-    ) -> None:
-        request_id = f"payload-capture-{command.id}"
-        request = ProtocolTransaction(
-            id=request_id, run_id=command.run_id, mission_id=command.id,
-            link=ProtocolLinkKind.PAYLOAD_BUS, protocol="PayloadDriver/1",
-            message_type="CAPTURE_REQUEST", source_node=NodeKind.PLATFORM,
-            target_node=NodeKind.OPTICAL, direction="platform->optical",
-            status=ProtocolTransactionStatus.COMPLETED,
-            total_bytes=0, frame_count=1,
-            payload=ProtocolPayloadView(kind="json", mime_type="application/json", decoded_json={
-                "mission_id": command.id, "scene_id": command.scene_id,
-                "target": {"name": command.target_name, "latitude": command.target_latitude,
-                           "longitude": command.target_longitude},
-            }), completed_at=utc_now(),
-        )
-        await self.report_trace(request)
-        await self.report_trace(ProtocolFrameTrace(
-            transaction_id=request_id, sequence=0, total=1,
-            message_type="CAPTURE_REQUEST", payload_bytes=0,
-            simulated_at=simulated_at, ack_status="ack",
-        ))
-        raw_id = f"payload-raw-{command.id}"
-        packet_count = int(manifest.quality.get("packet_count", 0))
-        raw = ProtocolTransaction(
-            id=raw_id, run_id=command.run_id, mission_id=command.id,
-            link=ProtocolLinkKind.PAYLOAD_BUS, protocol="PayloadDriver/1",
-            message_type="RAW_PACKET", source_node=NodeKind.OPTICAL,
-            target_node=NodeKind.PLATFORM, direction="optical->platform",
-            status=ProtocolTransactionStatus.COMPLETED,
-            total_bytes=manifest.size_bytes, frame_count=packet_count,
-            sha256=manifest.sha256,
-            payload=ProtocolPayloadView(kind="binary", mime_type=manifest.mime_type, summary={
-                "name": manifest.name, "bands": 3, "packets": packet_count,
-                "packet_header": "OPTR", "sha256": manifest.sha256,
-            }), completed_at=utc_now(),
-        )
-        await self.report_trace(raw)
-        # Persist a bounded representative sample rather than hundreds of identical rows.
-        for sequence in range(min(packet_count, 12)):
-            await self.report_trace(ProtocolFrameTrace(
-                transaction_id=raw_id, sequence=sequence, total=packet_count,
-                message_type="RAW_PACKET", payload_bytes=512,
-                simulated_at=simulated_at, crc32c=f"{crc32c(str(sequence).encode()):08x}",
-                ack_status="ack",
-            ))
-
     async def start(self) -> None:
-        self.scene_dir.mkdir(parents=True, exist_ok=True)
         self.product_dir.mkdir(parents=True, exist_ok=True)
         self.task_dir.mkdir(parents=True, exist_ok=True)
-        ensure_demo_scene(self.scene_dir)
         for path in self.task_dir.glob("*/state.json"):
             try:
                 self.missions[path.parent.name] = json.loads(path.read_text("utf-8"))
@@ -143,10 +83,35 @@ class PlatformState:
                 continue
         await self.uplink_receiver.start(self.settings.host, self.settings.platform_uplink_port)
         await self.result_receiver.start(self.settings.host, self.settings.platform_gtx_result_port)
+        await self.payload_result_receiver.start(
+            self.settings.host, self.settings.platform_payload_result_port
+        )
 
     async def close(self) -> None:
         await self.uplink_receiver.close()
         await self.result_receiver.close()
+        await self.payload_result_receiver.close()
+
+    async def handle_payload_result(
+        self, message_type: MessageType, payload: bytes, _frame: Frame
+    ) -> dict[str, Any]:
+        if message_type not in {MessageType.RAW_PRODUCT, MessageType.L0_PRODUCT}:
+            raise ValueError(f"unsupported payload result type {message_type.name}")
+        manifest, content = unpack_product(payload)
+        if hashlib.sha256(content).hexdigest() != manifest.sha256:
+            raise ValueError(f"payload product SHA-256 mismatch: {manifest.name}")
+        state = self.missions.get(manifest.mission_id)
+        if not state:
+            raise ValueError("unknown mission in payload product")
+        directory = self.product_dir / manifest.mission_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / manifest.name
+        path.write_bytes(content)
+        value = manifest.model_dump(mode="json")
+        value["artifact_path"] = str(path)
+        state["products"][manifest.level] = value
+        self.persist(manifest.mission_id)
+        return {"stored": manifest.level.value, "sha256": manifest.sha256}
 
     def persist(self, mission_id: str) -> None:
         directory = self.task_dir / mission_id
@@ -270,22 +235,6 @@ class PlatformState:
         self.persist(mission_id)
         return {"stored": True, "sha256": expected}
 
-    def scene_metadata(self, command: MissionCommand) -> tuple[Path, SceneMetadata]:
-        scene_path = self.scene_dir / f"{command.scene_id}.tif"
-        if not scene_path.exists():
-            raise FileNotFoundError(f"scene {command.scene_id} is not staged on platform")
-        with rasterio.open(scene_path) as src:
-            bounds = src.bounds
-            scene = SceneMetadata(
-                scene_id=command.scene_id,
-                target_name=command.target_name,
-                center_latitude=(bounds.top + bounds.bottom) / 2,
-                center_longitude=(bounds.left + bounds.right) / 2,
-                pixel_size_deg=abs(src.transform.a),
-                crs=str(src.crs or "EPSG:4326"),
-            )
-        return scene_path, scene
-
     async def advance(self, mission_id: str, body: dict[str, Any]) -> dict[str, Any]:
         state = self.missions.get(mission_id)
         if not state:
@@ -296,9 +245,6 @@ class PlatformState:
         scenario = ScenarioConfig.model_validate(state["scenario"])
         mission_dir = self.product_dir / mission_id
         mission_dir.mkdir(parents=True, exist_ok=True)
-        pipeline = OpticalPipeline(
-            SensorConfig(seed=scenario.seed, **scenario.sensor.model_dump())
-        )
         events: list[dict[str, Any]] = []
 
         if stage == "capture":
@@ -313,28 +259,36 @@ class PlatformState:
             )
             if spacecraft.pointing_error_deg > 0.1:
                 raise HTTPException(409, "姿态指向误差超过拍摄阈值")
-            scene_path, _scene = self.scene_metadata(command)
-            manifest, path = await asyncio.to_thread(
-                pipeline.capture_raw,
-                scene_path=scene_path,
-                output_dir=mission_dir,
-                run_id=command.run_id,
-                mission_id=mission_id,
-            )
-            raw_quicklook = mission_dir / f"{mission_id}_raw_quicklook.png"
-            await asyncio.to_thread(
-                pipeline.raw_quicklook,
-                raw_path=path,
-                scene_path=scene_path,
-                destination=raw_quicklook,
-            )
             state["spacecraft"] = spacecraft.model_dump(mode="json")
             state["captured_at"] = simulated_at.isoformat()
-            state["products"][ProductLevel.RAW] = manifest.model_dump(mode="json")
-            state["products"][ProductLevel.RAW]["artifact_path"] = str(path)
-            state["raw_quicklook_path"] = str(raw_quicklook)
+            clock = self.clock_for(simulated_at)
+            try:
+                await TCPTransport(
+                    profile=scenario.link_profile(LinkKind.PAYLOAD_BUS),
+                    clock=clock,
+                    trace_sink=self.report_trace,
+                    source_node=NodeKind.PLATFORM,
+                    target_node=NodeKind.OPTICAL,
+                ).send(
+                    self.settings.optical_payload_host,
+                    self.settings.optical_payload_port,
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    message_type=MessageType.CAPTURE_REQUEST,
+                    payload=pack_json(
+                        {
+                            "command": command.model_dump(mode="json"),
+                            "scenario": scenario.model_dump(mode="json"),
+                            "simulated_at": simulated_at.isoformat(),
+                        }
+                    ),
+                )
+            except RemoteTransferError as exc:
+                raise HTTPException(423 if "processor" in exc.code else 502, str(exc)) from exc
+            if ProductLevel.RAW not in state["products"]:
+                raise HTTPException(502, "Optical 未通过载荷总线返回 RAW")
+            manifest = ProductManifest.model_validate(state["products"][ProductLevel.RAW])
             state["phase"] = MissionPhase.CAPTURE_COMPLETE
-            await self.report_optical_bus(command, manifest, simulated_at)
             events.extend(
                 [
                     {
@@ -358,36 +312,68 @@ class PlatformState:
                 MissionPhase.PROCESSING_COMPLETE,
             }:
                 raise HTTPException(409, "星务任务阶段不允许产品处理")
-            raw_manifest = ProductManifest.model_validate(state["products"].get(ProductLevel.RAW))
-            raw_path = Path(str(raw_manifest.artifact_path))
-            scene_path, scene = self.scene_metadata(command)
-            l0_manifest, l0_path = await asyncio.to_thread(
-                pipeline.process_l0_from_raw,
-                raw_path=raw_path,
-                scene_path=scene_path,
-                output_dir=mission_dir,
-                run_id=command.run_id,
-                mission_id=mission_id,
-            )
-            state["products"][ProductLevel.L0] = l0_manifest.model_dump(mode="json")
-            state["products"][ProductLevel.L0]["artifact_path"] = str(l0_path)
+            clock = self.clock_for(simulated_at)
+            try:
+                await TCPTransport(
+                    profile=scenario.link_profile(LinkKind.PAYLOAD_BUS),
+                    clock=clock,
+                    trace_sink=self.report_trace,
+                    source_node=NodeKind.PLATFORM,
+                    target_node=NodeKind.OPTICAL,
+                ).send(
+                    self.settings.optical_payload_host,
+                    self.settings.optical_payload_port,
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    message_type=MessageType.L0_PROCESS_REQUEST,
+                    payload=pack_json(
+                        {
+                            "command": command.model_dump(mode="json"),
+                            "scenario": scenario.model_dump(mode="json"),
+                            "simulated_at": simulated_at.isoformat(),
+                        }
+                    ),
+                )
+            except RemoteTransferError as exc:
+                raise HTTPException(423 if "processor" in exc.code else 502, str(exc)) from exc
+            if ProductLevel.L0 not in state["products"]:
+                raise HTTPException(502, "Optical 未通过载荷总线返回 L0")
             l0_manifest = ProductManifest.model_validate(state["products"][ProductLevel.L0])
+            asset = command.scene_asset
+            if not asset:
+                raise HTTPException(409, "任务缺少冻结的场景资产元数据")
             state["l1_context"] = {
-                "scene": scene.__dict__,
+                "scene": {
+                    "scene_id": asset.scene_id,
+                    "target_name": command.target_name,
+                    "width": asset.width,
+                    "height": asset.height,
+                    "bands": asset.bands,
+                    "crs": asset.crs,
+                    "transform": list(asset.transform),
+                },
                 "captured_at": state["captured_at"],
                 "spacecraft": state["spacecraft"],
                 "sensor_seed": scenario.seed,
                 "sensor": scenario.sensor.model_dump(mode="json"),
                 "gtx_profile": scenario.link_profile(LinkKind.GTX).model_dump(mode="json"),
                 "l0": l0_manifest.model_dump(mode="json"),
+                "l1_processor_id": command.l1_processor_id,
+                "processor_snapshots": command.processor_snapshots,
             }
             state["phase"] = MissionPhase.PROCESSING_COMPLETE
             events.append(
                 {
                     "event_type": "l0_processing_completed",
                     "status": MissionStatus.L1A_PROCESSING,
-                    "message": "星务平台已完成 RAW 到 L0 重组，并将姿态、场景辅助数据与 L0 组织为 GPU L1 处理输入。",
-                    "data": {"manifest": state["products"][ProductLevel.L0], "context": state["l1_context"]},
+                    "message": (
+                        "光学载荷已完成 RAW 到 L0 重组并经载荷总线返回星务，"
+                        "星务已组织 GPU L1 处理输入。"
+                    ),
+                    "data": {
+                        "manifest": state["products"][ProductLevel.L0],
+                        "context": state["l1_context"],
+                    },
                 }
             )
 
@@ -401,19 +387,32 @@ class PlatformState:
                         "event_type": "l1_products_reused",
                         "status": MissionStatus.GTX_TRANSFER,
                         "message": "星务已持有 GPU 回传的 L1 产品，本次重试直接复用。",
-                        "data": {"products": [
-                            state["products"][level] for level in (
-                                ProductLevel.L1A, ProductLevel.L1B, ProductLevel.THUMBNAIL, ProductLevel.STAC
-                            ) if level in state["products"]
-                        ]},
+                        "data": {
+                            "products": [
+                                state["products"][level]
+                                for level in (
+                                    ProductLevel.L1A,
+                                    ProductLevel.L1B,
+                                    ProductLevel.THUMBNAIL,
+                                    ProductLevel.STAC,
+                                )
+                                if level in state["products"]
+                            ]
+                        },
                     }
                 )
                 self.persist(mission_id)
-                return {"events": events, "phase": state["phase"], "products": list(state["products"].values())}
+                return {
+                    "events": events,
+                    "phase": state["phase"],
+                    "products": list(state["products"].values()),
+                }
             l0_manifest = ProductManifest.model_validate(state["products"][ProductLevel.L0])
             l0_path = Path(str(l0_manifest.artifact_path))
             context_path = mission_dir / f"{mission_id}_l1_context.json"
-            context_path.write_text(json.dumps(state["l1_context"], ensure_ascii=False, indent=2), "utf-8")
+            context_path.write_text(
+                json.dumps(state["l1_context"], ensure_ascii=False, indent=2), "utf-8"
+            )
             context_manifest = ProductManifest(
                 run_id=command.run_id,
                 mission_id=mission_id,
@@ -437,17 +436,20 @@ class PlatformState:
                 source_node=NodeKind.PLATFORM,
                 target_node=NodeKind.GPU,
             )
-            transfer = await transport.send(
-                self.settings.gpu_gtx_host,
-                self.settings.gpu_gtx_port,
-                run_id=command.run_id,
-                mission_id=mission_id,
-                message_type=MessageType.L1_JOB,
-                payload=pack_product_bundle(
-                    [l0_manifest, context_manifest],
-                    {l0_manifest.id: l0_path, context_manifest.id: context_path},
-                ),
-            )
+            try:
+                transfer = await transport.send(
+                    self.settings.gpu_gtx_host,
+                    self.settings.gpu_gtx_port,
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    message_type=MessageType.L1_JOB,
+                    payload=pack_product_bundle(
+                        [l0_manifest, context_manifest],
+                        {l0_manifest.id: l0_path, context_manifest.id: context_path},
+                    ),
+                )
+            except RemoteTransferError as exc:
+                raise HTTPException(423 if "processor" in exc.code else 502, str(exc)) from exc
             if not transfer.response.get("l1b_sha256"):
                 raise HTTPException(502, "GPU 未返回 L1B 产品确认")
             if ProductLevel.L1B not in state["products"]:
@@ -464,9 +466,14 @@ class PlatformState:
                     "data": {
                         "record": record.model_dump(mode="json"),
                         "products": [
-                            state["products"][level] for level in (
-                                ProductLevel.L1A, ProductLevel.L1B, ProductLevel.THUMBNAIL, ProductLevel.STAC
-                            ) if level in state["products"]
+                            state["products"][level]
+                            for level in (
+                                ProductLevel.L1A,
+                                ProductLevel.L1B,
+                                ProductLevel.THUMBNAIL,
+                                ProductLevel.STAC,
+                            )
+                            if level in state["products"]
                         ],
                     },
                 }
@@ -489,8 +496,10 @@ class PlatformState:
                 return {"events": events, "phase": state["phase"]}
             clock = self.clock_for(simulated_at)
             transport = TCPTransport(
-                profile=scenario.link_profile(LinkKind.GTX), clock=clock,
-                trace_sink=self.report_trace, source_node=NodeKind.PLATFORM,
+                profile=scenario.link_profile(LinkKind.GTX),
+                clock=clock,
+                trace_sink=self.report_trace,
+                source_node=NodeKind.PLATFORM,
                 target_node=NodeKind.GPU,
             )
             try:
@@ -652,51 +661,35 @@ class PlatformState:
         if not state:
             raise KeyError(mission_id)
         products = [
-            ProductManifest.model_validate(value)
-            for value in state.get("products", {}).values()
+            ProductManifest.model_validate(value) for value in state.get("products", {}).values()
         ]
-        if node == NodeKind.OPTICAL:
-            products = [item for item in products if item.level == ProductLevel.RAW]
-            scenario = ScenarioConfig.model_validate(state["scenario"])
-            sensor = SensorConfig(seed=scenario.seed, **scenario.sensor.model_dump())
-            public_state = {
-                "phase": state.get("phase"), "captured_at": state.get("captured_at"),
-                "sensor": sensor.__dict__, "scene_id": state["command"].get("scene_id"),
-                "raw_packets": sum(int(item.quality.get("packet_count", 0)) for item in products if item.level == ProductLevel.RAW),
-                "missing_packets": 0, "crc_failures": 0,
-            }
-        elif node == NodeKind.GPU:
-            products = [
-                item for item in products
-                if item.level in {ProductLevel.L1A, ProductLevel.L1B, ProductLevel.THUMBNAIL, ProductLevel.STAC, ProductLevel.AI_RESULT}
-            ]
-            public_state = {
-                "phase": state.get("phase"),
-                "l1_ready": ProductLevel.L1B in state.get("products", {}),
-                "ai_result": state.get("ai_result"),
-            }
-        else:
-            public_state = {
-                "phase": state.get("phase"), "spacecraft": state.get("spacecraft"),
-                "clock": state.get("clock"), "received_at": state.get("received_at"),
-                "ai_result": state.get("ai_result"),
-            }
-        artifacts = [NodeArtifact(
-            key=item.id, name=item.name, level=item.level, mime_type=item.mime_type,
-            size_bytes=item.size_bytes, sha256=item.sha256,
-            previewable=item.level
-            in {ProductLevel.THUMBNAIL, ProductLevel.STAC, ProductLevel.AI_RESULT},
-        ) for item in products if item.artifact_path]
-        quicklook = Path(str(state.get("raw_quicklook_path", "")))
-        if node == NodeKind.OPTICAL and quicklook.is_file():
-            artifacts.append(NodeArtifact(
-                key="raw_quicklook", name=quicklook.name, level="raw_quicklook",
-                mime_type="image/png", size_bytes=quicklook.stat().st_size,
-                sha256=sha256_file(quicklook), previewable=True,
-            ))
+        public_state = {
+            "phase": state.get("phase"),
+            "spacecraft": state.get("spacecraft"),
+            "clock": state.get("clock"),
+            "received_at": state.get("received_at"),
+            "ai_result": state.get("ai_result"),
+        }
+        artifacts = [
+            NodeArtifact(
+                key=item.id,
+                name=item.name,
+                level=item.level,
+                mime_type=item.mime_type,
+                size_bytes=item.size_bytes,
+                sha256=item.sha256,
+                previewable=item.level
+                in {ProductLevel.THUMBNAIL, ProductLevel.STAC, ProductLevel.AI_RESULT},
+            )
+            for item in products
+            if item.artifact_path
+        ]
         return NodeSnapshot(
-            node=node, mission_id=mission_id, status=str(state.get("phase", "unknown")),
-            observation_notice="仿真观察数据，未通过星地下传", state=public_state,
+            node=node,
+            mission_id=mission_id,
+            status=str(state.get("phase", "unknown")),
+            observation_notice="仿真观察数据，未通过星地下传",
+            state=public_state,
             artifacts=artifacts,
         )
 
@@ -705,17 +698,6 @@ class PlatformState:
         if key not in {item.key for item in snapshot.artifacts}:
             raise KeyError(key)
         state = self.missions[mission_id]
-        if node == NodeKind.OPTICAL and key == "raw_quicklook":
-            path = Path(str(state.get("raw_quicklook_path", ""))).resolve()
-            if not path.is_file() or self.product_dir.resolve() not in path.parents:
-                raise KeyError(key)
-            command = MissionCommand.model_validate(state["command"])
-            return path, ProductManifest(
-                id="raw_quicklook", run_id=command.run_id, mission_id=mission_id,
-                level=ProductLevel.THUMBNAIL, name=path.name, mime_type="image/png",
-                size_bytes=path.stat().st_size, sha256=sha256_file(path),
-                quality={"observation_only": True}, artifact_path=str(path),
-            )
         manifest = next(
             ProductManifest.model_validate(value)
             for value in state.get("products", {}).values()
@@ -747,7 +729,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             "version": __version__,
             "uplink_listener": app_settings.platform_uplink_port,
             "gtx_result_listener": app_settings.platform_gtx_result_port,
-            "payloads": {"optical": "ready", "infrared": "not_implemented"},
+            "payload_result_listener": app_settings.platform_payload_result_port,
+            "payloads": {"optical": "remote", "infrared": "not_implemented"},
         }
 
     @app.post("/internal/missions/{mission_id}/advance")
@@ -763,7 +746,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
     @app.get("/internal/missions/{mission_id}/nodes/{node}", response_model=NodeSnapshot)
     async def node_snapshot(mission_id: str, node: NodeKind) -> NodeSnapshot:
-        if node not in {NodeKind.PLATFORM, NodeKind.OPTICAL}:
+        if node != NodeKind.PLATFORM:
             raise HTTPException(404, "node not hosted by platform")
         try:
             return state.node_snapshot(mission_id, node)
@@ -777,24 +760,6 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "artifact not found") from exc
         return FileResponse(path, media_type=manifest.mime_type, filename=manifest.name)
-
-    @app.post("/internal/scenes")
-    async def stage_scene(
-        scene_id: str = Query(..., min_length=1, max_length=120),
-        file: UploadFile = File(...),
-    ) -> dict[str, Any]:
-        content = await file.read()
-        path = state.scene_dir / f"{scene_id}.tif"
-        path.write_bytes(content)
-        try:
-            with rasterio.open(path) as src:
-                if src.dtypes[0] != "uint16":
-                    raise ValueError("scene must use uint16 samples")
-                shape = [src.count, src.height, src.width]
-        except Exception as exc:
-            path.unlink(missing_ok=True)
-            raise HTTPException(400, f"invalid scene: {exc}") from exc
-        return {"id": scene_id, "sha256": hashlib.sha256(content).hexdigest(), "shape": shape}
 
     return app
 

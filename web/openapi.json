@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Satellite Simulation Ground Station API",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "paths": {
     "/health": {
@@ -65,6 +65,117 @@
         }
       }
     },
+    "/api/scenes/validate": {
+      "post": {
+        "summary": "Validate Scene",
+        "operationId": "validate_scene_api_scenes_validate_post",
+        "parameters": [
+          {
+            "name": "scene_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Scene Id"
+            }
+          },
+          {
+            "name": "center_latitude",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Center Latitude"
+            }
+          },
+          {
+            "name": "center_longitude",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Center Longitude"
+            }
+          },
+          {
+            "name": "pixel_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pixel Size"
+            }
+          },
+          {
+            "name": "crs",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "EPSG:4326",
+              "title": "Crs"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_validate_scene_api_scenes_validate_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Validate Scene Api Scenes Validate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/scenes/import": {
       "post": {
         "summary": "Import Scene",
@@ -98,6 +209,64 @@
               ],
               "title": "Scenario Id"
             }
+          },
+          {
+            "name": "center_latitude",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Center Latitude"
+            }
+          },
+          {
+            "name": "center_longitude",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Center Longitude"
+            }
+          },
+          {
+            "name": "pixel_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pixel Size"
+            }
+          },
+          {
+            "name": "crs",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "EPSG:4326",
+              "title": "Crs"
+            }
           }
         ],
         "requestBody": {
@@ -119,6 +288,278 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Import Scene Api Scenes Import Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scenes": {
+      "get": {
+        "summary": "List Scenes",
+        "operationId": "list_scenes_api_scenes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Scenes Api Scenes Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processors/validate": {
+      "post": {
+        "summary": "Validate Processor",
+        "operationId": "validate_processor_api_processors_validate_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_validate_processor_api_processors_validate_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Validate Processor Api Processors Validate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/processor-executions": {
+      "post": {
+        "summary": "Record Processor Execution",
+        "operationId": "record_processor_execution_internal_processor_executions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessorExecution"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processors": {
+      "post": {
+        "summary": "Import Processor",
+        "operationId": "import_processor_api_processors_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_processor_api_processors_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessorVersion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Processors",
+        "operationId": "list_processors_api_processors_get",
+        "parameters": [
+          {
+            "name": "stage",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ProcessorStage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stage"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProcessorVersion"
+                  },
+                  "title": "Response List Processors Api Processors Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processors/{processor_id}": {
+      "get": {
+        "summary": "Get Processor",
+        "operationId": "get_processor_api_processors__processor_id__get",
+        "parameters": [
+          {
+            "name": "processor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Processor Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessorVersion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scenarios/{scenario_id}/processors": {
+      "post": {
+        "summary": "Select Processors",
+        "operationId": "select_processors_api_scenarios__scenario_id__processors_post",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScenarioConfig"
                 }
               }
             }
@@ -1129,6 +1570,20 @@
         ],
         "title": "AIMode"
       },
+      "Body_import_processor_api_processors_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_processor_api_processors_post"
+      },
       "Body_import_scenario_yaml_api_scenarios_import_yaml_post": {
         "properties": {
           "file": {
@@ -1156,6 +1611,34 @@
           "file"
         ],
         "title": "Body_import_scene_api_scenes_import_post"
+      },
+      "Body_validate_processor_api_processors_validate_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_validate_processor_api_processors_validate_post"
+      },
+      "Body_validate_scene_api_scenes_validate_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_validate_scene_api_scenes_validate_post"
       },
       "ClockAction": {
         "type": "string",
@@ -1288,7 +1771,8 @@
         "enum": [
           "gtx",
           "uplink",
-          "downlink"
+          "downlink",
+          "payload_bus"
         ],
         "title": "LinkKind"
       },
@@ -1419,6 +1903,45 @@
             "title": "Scene Id",
             "default": "demo-optical-scene"
           },
+          "scene_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scene Asset Id"
+          },
+          "scene_asset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneAsset"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "l0_processor_id": {
+            "type": "string",
+            "title": "L0 Processor Id",
+            "default": "builtin-l0"
+          },
+          "l1_processor_id": {
+            "type": "string",
+            "title": "L1 Processor Id",
+            "default": "builtin-l1"
+          },
+          "processor_snapshots": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Processor Snapshots"
+          },
           "enable_ai": {
             "type": "boolean",
             "title": "Enable Ai",
@@ -1432,7 +1955,7 @@
             "type": "string",
             "maxLength": 4000,
             "title": "Project Context",
-            "default": "星上智能计算数字孪生光学观测任务"
+            "default": "SpaceZenith-Sim 光学观测任务"
           },
           "analysis_prompt": {
             "type": "string",
@@ -1516,7 +2039,7 @@
             "type": "string",
             "maxLength": 4000,
             "title": "Project Context",
-            "default": "星上智能计算数字孪生光学观测任务"
+            "default": "SpaceZenith-Sim 光学观测任务"
           },
           "analysis_prompt": {
             "type": "string",
@@ -2038,6 +2561,238 @@
         ],
         "title": "PlannedWindows"
       },
+      "ProcessorDefinition": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schema Version"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,79}$",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessorStage"
+          },
+          "entrypoint": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 3,
+            "title": "Entrypoint"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "default": 120
+          },
+          "cpu_limit": {
+            "type": "number",
+            "maximum": 16.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Cpu Limit",
+            "default": 1.0
+          },
+          "memory_mb": {
+            "type": "integer",
+            "maximum": 32768.0,
+            "minimum": 128.0,
+            "title": "Memory Mb",
+            "default": 1024
+          },
+          "output_limit_mb": {
+            "type": "integer",
+            "maximum": 16384.0,
+            "minimum": 1.0,
+            "title": "Output Limit Mb",
+            "default": 1024
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "id",
+          "name",
+          "version",
+          "stage",
+          "entrypoint"
+        ],
+        "title": "ProcessorDefinition",
+        "description": "Strict manifest embedded in an uploaded processor bundle."
+      },
+      "ProcessorExecution": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "mission_id": {
+            "type": "string",
+            "title": "Mission Id"
+          },
+          "processor_id": {
+            "type": "string",
+            "title": "Processor Id"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessorStage"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProcessorRuntimeStatus",
+            "default": "running"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "input_summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input Summary"
+          },
+          "output_summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Output Summary"
+          },
+          "resource_limits": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resource Limits"
+          },
+          "stdout": {
+            "type": "string",
+            "title": "Stdout",
+            "default": ""
+          },
+          "stderr": {
+            "type": "string",
+            "title": "Stderr",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "mission_id",
+          "processor_id",
+          "stage"
+        ],
+        "title": "ProcessorExecution"
+      },
+      "ProcessorRuntimeStatus": {
+        "type": "string",
+        "enum": [
+          "builtin",
+          "ready",
+          "unavailable",
+          "running",
+          "completed",
+          "failed"
+        ],
+        "title": "ProcessorRuntimeStatus"
+      },
+      "ProcessorStage": {
+        "type": "string",
+        "enum": [
+          "l0",
+          "l1"
+        ],
+        "title": "ProcessorStage"
+      },
+      "ProcessorVersion": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ProcessorDefinition"
+          },
+          "sha256": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Sha256"
+          },
+          "bundle_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Path"
+          },
+          "runtime_status": {
+            "$ref": "#/components/schemas/ProcessorRuntimeStatus",
+            "default": "ready"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "definition",
+          "sha256"
+        ],
+        "title": "ProcessorVersion"
+      },
       "ProductLevel": {
         "type": "string",
         "enum": [
@@ -2481,6 +3236,27 @@
             "title": "Scene Id",
             "default": "demo-optical-scene"
           },
+          "scene_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scene Asset Id"
+          },
+          "l0_processor_id": {
+            "type": "string",
+            "title": "L0 Processor Id",
+            "default": "builtin-l0"
+          },
+          "l1_processor_id": {
+            "type": "string",
+            "title": "L1 Processor Id",
+            "default": "builtin-l1"
+          },
           "scene_ready": {
             "type": "boolean",
             "title": "Scene Ready",
@@ -2537,6 +3313,128 @@
           "action"
         ],
         "title": "ScenarioControl"
+      },
+      "SceneAsset": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "scene_id": {
+            "type": "string",
+            "title": "Scene Id"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "default": 1
+          },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "source_mime_type": {
+            "type": "string",
+            "title": "Source Mime Type"
+          },
+          "source_sha256": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Source Sha256"
+          },
+          "canonical_sha256": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Canonical Sha256"
+          },
+          "width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Height"
+          },
+          "bands": {
+            "type": "integer",
+            "maximum": 16.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Bands"
+          },
+          "dtype": {
+            "type": "string",
+            "title": "Dtype",
+            "default": "uint16"
+          },
+          "crs": {
+            "type": "string",
+            "title": "Crs"
+          },
+          "transform": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 9,
+            "minItems": 9,
+            "title": "Transform"
+          },
+          "conversion": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Conversion"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scene_id",
+          "source_name",
+          "source_mime_type",
+          "source_sha256",
+          "canonical_sha256",
+          "width",
+          "height",
+          "bands",
+          "crs",
+          "transform"
+        ],
+        "title": "SceneAsset"
       },
       "SensorSettings": {
         "properties": {
