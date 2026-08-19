@@ -76,7 +76,7 @@ export function NodeTab({ node, mission, providerHealth, activeAiMode, gtxLink, 
         <span className="rounded border border-orange-300/20 bg-orange-300/10 px-2 py-1 text-[10px] text-orange-200">{providerStatus ?? "UNKNOWN"}</span>
       </div>
       <p className="text-xs leading-5 text-slate-500">{t("node.providerNote", { mode: activeAiMode.toUpperCase() })}</p>
-      {mission && mission.ai_mode !== activeAiMode && <p className="mt-2 text-[10px] leading-4 text-orange-300">{locale === "zh" ? `当前任务固定使用 ${mission.ai_mode.toUpperCase()}；设置中的 ${activeAiMode.toUpperCase()} 将用于后续新任务。` : `The current mission remains ${mission.ai_mode.toUpperCase()}; ${activeAiMode.toUpperCase()} applies to subsequent missions.`}</p>}
+      {mission && mission.ai_mode !== activeAiMode && <p className="mt-2 text-[10px] leading-4 text-orange-300">{t("mission.modeLocked", { missionMode: mission.ai_mode.toUpperCase(), activeMode: activeAiMode.toUpperCase() })}</p>}
     </section>}
 
     <section className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
