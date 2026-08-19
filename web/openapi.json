@@ -824,6 +824,56 @@
         }
       }
     },
+    "/api/missions/{mission_id}/prompt": {
+      "patch": {
+        "summary": "Update Mission Prompt",
+        "description": "Allow an LLM instruction to change until its AI step begins.",
+        "operationId": "update_mission_prompt_api_missions__mission_id__prompt_patch",
+        "parameters": [
+          {
+            "name": "mission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mission Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MissionPromptUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/missions/{mission_id}/advance": {
       "post": {
         "summary": "Advance Mission",
@@ -2205,6 +2255,22 @@
           "completed"
         ],
         "title": "MissionPhase"
+      },
+      "MissionPromptUpdate": {
+        "properties": {
+          "analysis_prompt": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Analysis Prompt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_prompt"
+        ],
+        "title": "MissionPromptUpdate",
+        "description": "Mutable LLM instruction before the AI execution step begins."
       },
       "MissionStatus": {
         "type": "string",

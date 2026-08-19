@@ -36,6 +36,7 @@ from sat_simulation.common.models import (
     MissionCommand,
     MissionCreate,
     MissionDetail,
+    MissionPromptUpdate,
     MissionPhase,
     MissionStatus,
     MissionSummary,
@@ -125,6 +126,7 @@ EVENT_MESSAGE_KEYS: dict[str, str] = {
     "gtx_transfer_completed": "mission.event.gtxTransferCompleted",
     "ai_result_reused": "mission.event.aiResultReused",
     "ai_result_stored": "mission.event.aiResultStored",
+    "mission_prompt_updated": "mission.event.promptUpdated",
 }
 
 
@@ -1258,6 +1260,58 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         )
         return MissionDetail.model_validate(
             enrich_mission((await state.repo.get_mission(command.id)) or {})
+        )
+
+    @app.patch("/api/missions/{mission_id}/prompt", response_model=MissionDetail)
+    async def update_mission_prompt(
+        mission_id: str, request: MissionPromptUpdate
+    ) -> MissionDetail:
+        """Allow an LLM instruction to change until its AI step begins."""
+        mission = await state.repo.get_mission(mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found.")
+        command: MissionCommand = mission["command"]
+        if command.ai_mode.value != "llm":
+            raise HTTPException(409, "只有 LLM 任务可以修改分析 Prompt。")
+        if mission.get("active_substage") == "ai" or mission["phase"] in {
+            MissionPhase.AI_COMPLETE,
+            MissionPhase.COMPLETED,
+        }:
+            raise HTTPException(409, "LLM 分析已开始，任务 Prompt 已冻结。")
+
+        updated = command.model_copy(update={"analysis_prompt": request.analysis_prompt.strip()})
+        # The platform owns the command copy used to build AI_EXECUTE.  Once
+        # uplink has happened, synchronize it before committing Ground's copy.
+        if mission["phase"] != MissionPhase.INITIALIZED:
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    response = await client.patch(
+                        f"{app_settings.platform_http_url}/internal/missions/{mission_id}/prompt",
+                        json={"analysis_prompt": updated.analysis_prompt},
+                    )
+                    response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"无法同步星务平台 Prompt：{exc}") from exc
+        try:
+            await state.repo.update_mission_analysis_prompt(updated)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+        await state.append_event(
+            TelemetryEvent(
+                run_id=updated.run_id,
+                mission_id=updated.id,
+                event_type="mission_prompt_updated",
+                status=mission["status"],
+                message="LLM 分析 Prompt 已更新，AI 分析步骤前仍可继续修改。",
+                simulated_at=(await state.clock_for(updated.scenario_id)).now(),
+                source="ground-orchestrator",
+                data={"message_key": EVENT_MESSAGE_KEYS["mission_prompt_updated"]},
+                channel="simulation_control",
+            )
+        )
+        return MissionDetail.model_validate(
+            enrich_mission((await state.repo.get_mission(mission_id)) or {})
         )
 
     @app.post("/api/missions/{mission_id}/advance", status_code=202)

@@ -329,6 +329,20 @@ class Repository:
             row.ai_mode = command.ai_mode
             row.updated_at = now_utc()
 
+    async def update_mission_analysis_prompt(self, command: MissionCommand) -> None:
+        """Persist a task-specific LLM instruction until AI execution starts."""
+        async with self.session() as session:
+            row = await session.get(MissionRow, command.id, with_for_update=True)
+            if not row:
+                raise KeyError(command.id)
+            if row.active_substage == "ai" or row.phase in {
+                MissionPhase.AI_COMPLETE,
+                MissionPhase.COMPLETED,
+            }:
+                raise RuntimeError("mission prompt is frozen after AI analysis starts")
+            row.command_json = command.model_dump_json()
+            row.updated_at = now_utc()
+
     async def active_mission_for_scenario(self, scenario_id: str) -> str | None:
         async with self.session() as session:
             return await session.scalar(

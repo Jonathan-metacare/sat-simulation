@@ -366,6 +366,12 @@ class MissionAdvance(BaseModel):
     playback_speed: Literal[1, 2, 5] = 1
 
 
+class MissionPromptUpdate(BaseModel):
+    """Mutable LLM instruction before the AI execution step begins."""
+
+    analysis_prompt: str = Field(min_length=1, max_length=2000)
+
+
 class SpacecraftState(BaseModel):
     sampled_at: datetime
     latitude: float

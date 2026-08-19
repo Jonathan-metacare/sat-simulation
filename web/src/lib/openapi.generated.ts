@@ -279,6 +279,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/missions/{mission_id}/prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Mission Prompt
+         * @description Allow an LLM instruction to change until its AI step begins.
+         */
+        patch: operations["update_mission_prompt_api_missions__mission_id__prompt_patch"];
+        trace?: never;
+    };
     "/api/missions/{mission_id}/advance": {
         parameters: {
             query?: never;
@@ -882,6 +902,14 @@ export interface components {
          * @enum {string}
          */
         MissionPhase: "initialized" | "uplink_complete" | "capture_complete" | "processing_complete" | "gtx_complete" | "ai_complete" | "completed";
+        /**
+         * MissionPromptUpdate
+         * @description Mutable LLM instruction before the AI execution step begins.
+         */
+        MissionPromptUpdate: {
+            /** Analysis Prompt */
+            analysis_prompt: string;
+        };
         /**
          * MissionStatus
          * @enum {string}
@@ -2196,6 +2224,41 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_mission_prompt_api_missions__mission_id__prompt_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MissionPromptUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

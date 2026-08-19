@@ -177,6 +177,19 @@ class PlatformState:
             }
         raise ValueError(f"unsupported uplink message type {message_type.name}")
 
+    def update_analysis_prompt(self, mission_id: str, analysis_prompt: str) -> dict[str, Any]:
+        """Update only the pre-AI instruction kept in the platform mission state."""
+        state = self.missions.get(mission_id)
+        if not state:
+            raise KeyError("mission not found")
+        if state.get("phase") in {MissionPhase.AI_COMPLETE, MissionPhase.COMPLETED}:
+            raise RuntimeError("mission prompt is frozen after AI analysis starts")
+        command = MissionCommand.model_validate(state["command"])
+        command.analysis_prompt = analysis_prompt
+        state["command"] = command.model_dump(mode="json")
+        self.persist(mission_id)
+        return {"mission_id": mission_id, "updated": True}
+
     async def handle_gtx_result(
         self, message_type: MessageType, payload: bytes, _frame: Frame
     ) -> dict[str, Any]:
@@ -736,6 +749,20 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     @app.post("/internal/missions/{mission_id}/advance")
     async def advance(mission_id: str, body: dict[str, Any]) -> dict[str, Any]:
         return await state.advance(mission_id, body)
+
+    @app.patch("/internal/missions/{mission_id}/prompt")
+    async def update_prompt(mission_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        prompt = str(body.get("analysis_prompt") or "").strip()
+        if not prompt:
+            raise HTTPException(422, "analysis_prompt must not be empty")
+        if len(prompt) > 2000:
+            raise HTTPException(422, "analysis_prompt exceeds 2000 characters")
+        try:
+            return state.update_analysis_prompt(mission_id, prompt)
+        except KeyError as exc:
+            raise HTTPException(404, "mission not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get("/internal/missions/{mission_id}")
     async def mission_state(mission_id: str) -> dict[str, Any]:

@@ -43,6 +43,7 @@ export const api = {
   missions:()=>request<MissionSummary[]>("/missions"),
   mission:(id:string)=>request<MissionDetail>(`/missions/${id}`),
   createMission:(scenarioId:string,name:string,aiMode:AIMode,projectContext:string,analysisPrompt:string)=>request<MissionDetail>("/missions",{method:"POST",body:JSON.stringify({scenario_id:scenarioId,name,ai_mode:aiMode,project_context:projectContext,analysis_prompt:analysisPrompt})}),
+  updateMissionPrompt:(missionId:string,analysisPrompt:string)=>request<MissionDetail>(`/missions/${missionId}/prompt`,{method:"PATCH",body:JSON.stringify({analysis_prompt:analysisPrompt})}),
   advanceMission:(missionId:string,playbackSpeed:1|2|5,idempotencyKey:string)=>request<{mission_id:string;action:string}>(`/missions/${missionId}/advance`,{method:"POST",body:JSON.stringify({playback_speed:playbackSpeed,idempotency_key:idempotencyKey})}),
   cancelMission:(missionId:string)=>request<MissionDetail>(`/missions/${missionId}/cancel`,{method:"POST"}),
   missionResult:(missionId:string)=>request<MissionResultResponse>(`/missions/${missionId}/result`),
