@@ -26,7 +26,7 @@ export function deriveTopologyFlows(mission?: TopologyMissionState) {
         : phase && phase !== "initialized"
           ? "complete"
           : "idle",
-      label: substage === "downlink" && running ? "结果请求上注 / 结果包下传" : "数传链路",
+      label: substage === "downlink" && running ? "topology.uplinkDownlink" : "topology.datalink",
     } as { state: FlowState; label: string },
     payload: {
       state: running && ["capture", "processing"].includes(substage ?? "")
@@ -36,7 +36,7 @@ export function deriveTopologyFlows(mission?: TopologyMissionState) {
         ].includes(phase)
           ? "complete"
           : "idle",
-      label: substage === "processing" && running ? "产品处理" : "载荷总线",
+      label: substage === "processing" && running ? "topology.processing" : "topology.payloadBus",
     } as { state: FlowState; label: string },
     gtx: {
       state: running && ["gtx", "ai"].includes(substage ?? "")
@@ -44,7 +44,7 @@ export function deriveTopologyFlows(mission?: TopologyMissionState) {
         : phase && ["gtx_complete", "ai_complete", "completed"].includes(phase)
           ? "complete"
           : "idle",
-      label: substage === "ai" && running ? "AI 指令 / 结果" : "GTX 2.5G",
+      label: substage === "ai" && running ? "topology.aiResult" : "GTX 2.5G",
     } as { state: FlowState; label: string },
     downlink: {
       state: running && substage === "downlink"
@@ -52,7 +52,7 @@ export function deriveTopologyFlows(mission?: TopologyMissionState) {
         : phase === "completed"
           ? "complete"
           : "idle",
-      label: "结果包下传",
+      label: "topology.downlink",
     } as { state: FlowState; label: string },
   };
 }
@@ -156,11 +156,11 @@ export function SystemTopology({ mission, onNavigate, locale = "zh" }: { mission
       <span className={`absolute left-[76%] top-[135px] -translate-x-1/2 translate-y-3 text-[8px] tracking-wider ${flows.gtx.state === "active" ? "text-cyan-200" : "text-slate-500"}`}>{labels.gtx}</span>
       </div>
     </div>
-    <div className="mt-1 flex justify-between px-[5%] text-[8px] tracking-wide text-slate-600">
+    {/* <div className="mt-1 flex justify-between px-[5%] text-[8px] tracking-wide text-slate-600">
       <span>{t("topology.center")}</span>
       <span className={flows.downlink.state === "active" ? "text-cyan-200" : ""}>
         {flows.downlink.state === "active" ? t("topology.downlinkActive") : t("topology.noDirect")}
       </span>
-    </div>
+    </div> */}
   </div>;
 }
