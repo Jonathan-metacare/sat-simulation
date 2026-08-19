@@ -21,10 +21,10 @@ The ground node owns the authoritative run ID, frozen three-window SGP4 plan and
 simulation clock. A mission persists the macro phase
 `initialized -> uplink_complete -> capture_complete -> processing_complete ->
 gtx_complete -> ai_complete -> completed`. Each advance runs exactly one phase,
-records an attempt and ends with both Ground and Platform clocks paused.
+records an attempt and ends with both Ground and OBC clocks paused.
 
-Optical owns the selected scene input and generates RAW and L0. Platform receives
-both only through the framed Payload Bus. Platform packages L0 plus frozen orbit,
+Optical owns the selected scene input and generates RAW and L0. OBC receives
+both only through the framed Payload Bus. OBC packages L0 plus frozen orbit,
 attitude, georeference and calibration context into `L1_JOB`; GPU/Jetson produces
 L1A/L1B/STAC and returns `L1_PRODUCTS` over GTX. AI consumes only the verified L1B.
 The final ground result

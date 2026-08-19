@@ -150,6 +150,8 @@ class GPUState:
             mission_id=mission_id,
             processor_id=processor_id,
             stage=ProcessorStage.L1,
+            runtime_type=self.settings.oci_runtime,
+            sandbox_profile_version=("seatbelt-v1" if self.settings.oci_runtime == "desktop-sandbox" else None),
             input_summary={
                 "l0_sha256": l0_manifest.sha256,
                 "ancillary_sha256": sha256_file(context_path),
@@ -181,10 +183,11 @@ class GPUState:
         except ProcessorBlocked as exc:
             execution.status = (
                 ProcessorRuntimeStatus.UNAVAILABLE
-                if any(word in str(exc) for word in ("Docker", "Runtime", "镜像"))
+                if any(word in str(exc) for word in ("Docker", "Runtime", "镜像", "桌面安全执行器"))
                 else ProcessorRuntimeStatus.FAILED
             )
             execution.error = str(exc)
+            execution.block_reason = str(exc)
             execution.finished_at = utc_now()
             await self.report_execution(execution)
             raise

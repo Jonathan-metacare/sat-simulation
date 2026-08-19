@@ -27,9 +27,13 @@ Then run `uv run python scripts/demo_mission.py`. Check `/health` on ports 8000,
 
 ## Custom processing sandbox
 
-Built-in L0/L1 needs no container runtime. To run customer processors, install and
-start Docker (or set `SAT_SIM_OCI_RUNTIME` to a compatible CLI), then build the
-fixed Python 3.12 runtime image once:
+Built-in L0/L1 needs no container runtime. The macOS desktop application runs
+customer Python 3.12 processor versions through its bundled Seatbelt executor;
+Docker is not required. The executor denies network and user-data access and
+only exposes the per-execution input and output directories.
+
+For a non-desktop server deployment, customer processors still use Docker (or a
+compatible OCI runtime). Build the fixed Python 3.12 runtime image once:
 
 ```bash
 docker build -t spacezenith/processor-python:3.12 processor-runtime

@@ -6,10 +6,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Cpu, Database, Download, FileArchive, FileImage, Radio, Satellite, ScanLine, ShieldCheck, Upload } from "lucide-react";
 
-import { api, nodeArtifactURL } from "~/lib/api";
+import { api, nodeArtifactURL, processorDownloadURL } from "~/lib/api";
 import { translate } from "~/lib/i18n";
 import type { Locale } from "~/lib/store";
-import type { AIMode, MissionDetail, NodeArtifact, NodeKind, NodeSnapshot, ProcessorStage, ProcessorVersion, ScenarioConfig } from "~/lib/types";
+import type { AIMode, MissionDetail, NodeArtifact, NodeKind, NodeSnapshot, ProcessorSource, ProcessorStage, ProcessorVersion, ScenarioConfig } from "~/lib/types";
 
 const titles: Record<Exclude<NodeKind, "ground">, { title: Parameters<typeof translate>[1]; subtitle: Parameters<typeof translate>[1] }> = {
   platform: { title: "node.platform.title", subtitle: "node.platform.subtitle" },
@@ -189,17 +189,36 @@ function ProcessorConfiguration({ stage, scenario, locale, onChanged, locked = f
   const [processors, setProcessors] = useState<ProcessorVersion[]>([]);
   const [selected, setSelected] = useState(stage === "l0" ? scenario.l0_processor_id : scenario.l1_processor_id);
   const [bundle, setBundle] = useState<File>();
+  const [source, setSource] = useState<ProcessorSource>();
+  const [sourceFile, setSourceFile] = useState<"python" | "yaml">("python");
+  const [draft, setDraft] = useState("");
+  const [workspaceMode, setWorkspaceMode] = useState(false);
+  const [processorId, setProcessorId] = useState(`custom-${stage}`);
+  const [processorName, setProcessorName] = useState(`Custom ${stage.toUpperCase()} Processor`);
+  const [version, setVersion] = useState("1.0.0");
   const [status, setStatus] = useState<string>();
   const [busy, setBusy] = useState(false);
-  useEffect(() => { void api.processors(stage).then(setProcessors).catch((cause) => setStatus(String(cause))); }, [stage]);
-  useEffect(() => setSelected(stage === "l0" ? scenario.l0_processor_id : scenario.l1_processor_id), [scenario, stage]);
   const builtin = stage === "l0" ? "builtin-l0" : "builtin-l1";
-  const customActive = selected !== builtin;
-  const save = async (processorId = selected) => {
+  const activeId = stage === "l0" ? scenario.l0_processor_id : scenario.l1_processor_id;
+  const selectedProcessor = processors.find((item) => item.id === selected);
+  useEffect(() => { void api.processors(stage).then(setProcessors).catch((cause) => setStatus(String(cause))); }, [stage]);
+  useEffect(() => { setSelected(activeId); setWorkspaceMode(false); }, [activeId]);
+  useEffect(() => {
+    void api.processorSource(selected).then((value) => {
+      setSource(value); setDraft(value.processor_py); setWorkspaceMode(false);
+      const version = processors.find((item) => item.id === selected);
+      if (version) {
+        setProcessorId(version.definition.id);
+        setProcessorName(version.definition.name);
+        setVersion(version.definition.version);
+      }
+    }).catch((cause) => setStatus(String(cause)));
+  }, [processors, selected]);
+  const activate = async (nextId = selected) => {
     setBusy(true); setStatus(undefined);
     try {
-      await api.selectProcessors(scenario.id, stage === "l0" ? processorId : scenario.l0_processor_id, stage === "l1" ? processorId : scenario.l1_processor_id);
-      setSelected(processorId);
+      await api.selectProcessors(scenario.id, stage === "l0" ? nextId : scenario.l0_processor_id, stage === "l1" ? nextId : scenario.l1_processor_id);
+      setSelected(nextId);
       setStatus(translate(locale, "node.processorSaved"));
       onChanged?.();
     } catch (cause) { setStatus(cause instanceof Error ? cause.message : String(cause)); }
@@ -213,25 +232,33 @@ function ProcessorConfiguration({ stage, scenario, locale, onChanged, locked = f
       if (validation.definition.stage !== stage) throw new Error(`processor stage is ${validation.definition.stage}, expected ${stage}`);
       const imported = await api.importProcessor(bundle);
       setProcessors((items) => [imported, ...items.filter((item) => item.id !== imported.id)]);
-      await save(imported.id);
+      await activate(imported.id);
     } catch (cause) { setStatus(cause instanceof Error ? cause.message : String(cause)); setBusy(false); }
   };
+  const createCustom = () => {
+    setProcessorId(`custom-${stage}`); setProcessorName(`Custom ${stage.toUpperCase()} Processor`); setVersion("1.0.0");
+    setDraft(source?.processor_py ?? "");
+    setWorkspaceMode(true);
+  };
+  const saveWorkspace = async () => {
+    setBusy(true); setStatus(undefined);
+    try {
+      const saved = await api.saveProcessorWorkspace(stage, processorId, processorName, version, draft);
+      setProcessors((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      await activate(saved.id);
+      setStatus(translate(locale, "node.workspaceSaved"));
+    } catch (cause) { setStatus(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); }
+  };
   return <section className="panel rounded-2xl p-4">
-    <div className="mb-3 flex items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm text-cyan-100"><FileArchive size={15} />{stage.toUpperCase()} {translate(locale, "node.processor")}</h3><span className="rounded border border-orange-300/20 bg-orange-300/[.07] px-2 py-1 text-[10px] text-orange-200">OCI SANDBOX</span></div>
-    <p className="mb-3 text-xs leading-5 text-slate-500">{translate(locale, "node.processorNote", { stage: stage.toUpperCase() })}</p>
+    <div className="mb-3 flex items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm text-cyan-100"><FileArchive size={15} />{stage.toUpperCase()} {translate(locale, "node.workspace")}</h3><span className="rounded border border-emerald-300/25 bg-emerald-300/[.07] px-2 py-1 text-[10px] text-emerald-200">{translate(locale, "node.desktopSandbox")}</span></div>
+    <p className="mb-3 text-xs leading-5 text-slate-500">{translate(locale, "node.workspaceNote")}</p>
     {locked && <p className="mb-3 rounded-lg border border-orange-300/20 bg-orange-300/[.07] px-3 py-2 text-xs text-orange-200">{translate(locale, "node.processorFrozen", { stage: stage.toUpperCase(), processor: frozenProcessorId ?? builtin })}</p>}
-    <div className="grid min-w-0 grid-cols-2 gap-4">
-      <article className={`min-w-0 rounded-xl border p-4 transition ${!customActive ? "border-emerald-300/45 bg-emerald-300/[.08]" : "border-white/[.08] bg-black/[.12]"}`}>
-        <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex items-center gap-2 text-sm font-medium text-cyan-100"><ShieldCheck size={16} className="shrink-0 text-emerald-300" />{translate(locale, "node.builtinProcessing")}</div><p className="mt-2 text-xs leading-5 text-slate-500">{translate(locale, "node.builtinNote", { node: stage === "l0" ? "Optical" : "GPU Payload" })}</p></div><span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${!customActive ? "border-emerald-300/30 text-emerald-300" : "border-white/10 text-slate-500"}`}>{!customActive ? translate(locale, "node.default") : translate(locale, "node.fallback")}</span></div>
-        <div className="mt-4 flex flex-wrap items-center gap-2"><code className="rounded bg-black/20 px-2 py-1 text-[10px] text-slate-400">{builtin}</code>{customActive ? <button disabled={locked || busy} onClick={() => void save(builtin)} className="rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{translate(locale, "node.clearCustom")}</button> : <span className="text-[10px] text-slate-500"></span>}</div>
-      </article>
-      <article className="min-w-0 rounded-xl border border-emerald-300/45 bg-emerald-300/[.08] p-4 transition">
-        <div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2 text-sm font-medium text-cyan-100"><FileArchive size={16} className="text-emerald-300" />{translate(locale, "node.customProcessing")}</div><p className="mt-2 text-xs leading-5 text-slate-500">{translate(locale, "node.customNote")}</p></div>{selected !== builtin && <span className="rounded-full border border-emerald-300/30 px-2 py-1 text-[10px] text-emerald-300">{translate(locale, "node.active")}</span>}</div>
-        <div className="mt-4"><div className="mb-1.5 text-[10px] font-medium tracking-wider text-slate-500 uppercase">{translate(locale, "node.selectUploadedProcessor")}</div><div className="flex flex-wrap items-center gap-2"><select disabled={locked} value={customActive ? selected : ""} onChange={(event) => setSelected(event.target.value)} className="w-52 max-w-full rounded-lg border border-emerald-300/45 bg-sky-50/90 px-3 py-1.5 text-xs text-slate-700 shadow-sm disabled:opacity-40 dark:bg-slate-900/80 dark:text-slate-100"><option value="" disabled>{translate(locale, "node.chooseUploadedProcessor")}</option>{processors.map((item) => <option key={item.id} value={item.id}>{item.definition.name} · {item.definition.version}</option>)}</select><button disabled={locked || busy || !customActive} onClick={() => void save()} className="rounded-lg border border-emerald-300/30 px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{translate(locale, "node.activate")}</button></div></div>
-        <div className="mt-3"><div className="mb-1.5 text-[10px] font-medium tracking-wider text-slate-500 uppercase">{translate(locale, "node.importProcessorZip")}</div><div className="flex flex-wrap items-center gap-2"><input id={`processor-bundle-${stage}`} disabled={locked} type="file" accept=".zip,application/zip" onChange={(event) => setBundle(event.target.files?.[0])} className="sr-only" /><label htmlFor={`processor-bundle-${stage}`} className={`rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 transition ${locked ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:border-emerald-300/50"}`}>{translate(locale, "node.chooseZip")}</label>{bundle && <span className="max-w-36 truncate text-[10px] text-slate-400" title={bundle.name}>{bundle.name}</span>}<button disabled={locked || !bundle || busy} onClick={() => void upload()} className="rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{translate(locale, "node.validateImportActivate")}</button></div></div>
-        <div className="mt-3 text-[10px] leading-4 text-orange-300">{translate(locale, "node.processorRuntimeNote")}</div>
-      </article>
-    </div>
+    <div className="mb-3 flex flex-wrap items-center gap-2"><span className="text-[10px] tracking-wider text-slate-500 uppercase">{translate(locale, "node.currentVersion")}</span><select disabled={locked || busy} value={selected} onChange={(event) => setSelected(event.target.value)} className="w-72 max-w-full rounded-lg border border-cyan-300/30 bg-sky-50/90 px-3 py-1.5 text-xs text-slate-700 dark:bg-slate-900/80 dark:text-slate-100"><option value={builtin}>{builtin} · {translate(locale, "node.builtinProcessing")}</option>{processors.map((item) => <option key={item.id} value={item.id}>{item.definition.name} · {item.definition.version}</option>)}</select><button disabled={locked || busy || selected === activeId || workspaceMode} onClick={() => void activate()} className="rounded-lg border border-cyan-300/30 bg-cyan-300/[.08] px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-40">{translate(locale, "node.activate")}</button><button disabled={locked || busy} onClick={createCustom} className="rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{translate(locale, "node.createCustom")}</button></div>
+    <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-slate-500"><span>{translate(locale, "node.runtime")}: {selectedProcessor?.runtime_type ?? "desktop-sandbox"}</span><span>SHA: {selectedProcessor?.sha256.slice(0, 16) ?? "built-in reference"}</span></div>
+    {source && <div className="rounded-xl border border-emerald-300/35 bg-emerald-300/[.06] p-3"><div className="mb-3 flex flex-wrap items-center gap-2"><span className="text-xs text-cyan-100">{translate(locale, "node.processorSource")}</span><button onClick={() => setSourceFile("python")} className={`rounded px-2 py-1 text-[10px] ${sourceFile === "python" ? "bg-cyan-300/15 text-cyan-100" : "text-slate-500"}`}>{translate(locale, "node.pythonSource")}</button><button onClick={() => setSourceFile("yaml")} className={`rounded px-2 py-1 text-[10px] ${sourceFile === "yaml" ? "bg-cyan-300/15 text-cyan-100" : "text-slate-500"}`}>{translate(locale, "node.manifest")}</button><span className="ml-auto font-mono text-[10px] text-slate-500">{workspaceMode ? translate(locale, "node.createCustom") : selected}</span></div>{sourceFile === "yaml" ? <pre className="max-h-64 overflow-auto rounded-lg bg-black/20 p-3 font-mono text-[11px] leading-5 text-slate-300">{source.processor_yaml}</pre> : <textarea value={draft} readOnly={locked || (source.readonly && !workspaceMode)} onChange={(event) => setDraft(event.target.value)} spellCheck={false} className="h-80 w-full resize-y rounded-lg border border-white/10 bg-black/25 p-3 font-mono text-[11px] leading-5 text-slate-200 outline-none focus:border-cyan-300/40 read-only:opacity-75" />}{source.readonly && !workspaceMode && <p className="mt-2 text-[10px] text-slate-500">{translate(locale, "node.sourceReadonly")}</p>}</div>}
+    {(workspaceMode || !source?.readonly) && <div className="mt-3 grid gap-2 sm:grid-cols-3"><Input label={translate(locale, "node.processorId")} value={processorId} onChange={setProcessorId} disabled={locked || busy} /><Input label={translate(locale, "node.processorName")} value={processorName} onChange={setProcessorName} disabled={locked || busy} /><Input label={translate(locale, "node.version")} value={version} onChange={setVersion} disabled={locked || busy} /></div>}
+    <div className="mt-3 flex flex-wrap items-center gap-2"><a href={processorDownloadURL(selected)} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300">{translate(locale, "node.download")}</a><input id={`processor-bundle-${stage}`} disabled={locked} type="file" accept=".zip,application/zip" onChange={(event) => setBundle(event.target.files?.[0])} className="sr-only" /><label htmlFor={`processor-bundle-${stage}`} className={`rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 ${locked ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}>{translate(locale, "node.importZip")}</label>{bundle && <span className="max-w-36 truncate text-[10px] text-slate-400">{bundle.name}</span>}<button disabled={locked || !bundle || busy} onClick={() => void upload()} className="rounded-lg border border-emerald-300/30 px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{translate(locale, "node.importZip")}</button>{(workspaceMode || !source?.readonly) && <button disabled={locked || busy || !draft.trim()} onClick={() => void saveWorkspace()} className="rounded-lg border border-cyan-300/35 bg-cyan-300/[.08] px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-40">{translate(locale, "node.saveActivate")}</button>}</div>
     {status && <div className="mt-3 rounded-lg border border-cyan-300/15 bg-black/15 px-3 py-2 text-xs text-slate-300">{status}</div>}
   </section>;
 }

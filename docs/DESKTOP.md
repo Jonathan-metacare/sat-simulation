@@ -3,9 +3,11 @@
 The desktop build embeds the Ground, Platform, Optical and GPU services inside one
 Electron application. It binds every service to `127.0.0.1`, creates its own
 ports per launch, and does not require Docker or a system Python installation.
-This statement applies to the built-in L0/L1 pipeline. Customer ZIP processors
-still require a separately installed Docker-compatible OCI runtime and the
-processor runtime image described in `docs/PROCESSOR_SDK.md`.
+On macOS, both built-in and customer L0/L1 versions run through the
+application-managed Seatbelt executor. Customer code has no network, no user
+data-directory access and no host-Python fallback. Windows keeps custom
+processors fail-closed until its native secure runner is available; built-in
+L0/L1 processing remains available.
 
 ## Development
 

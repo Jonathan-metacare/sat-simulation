@@ -18,7 +18,7 @@ import rasterio
 import yaml
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import ValidationError
 from sgp4.api import Satrec
 from sse_starlette.sse import EventSourceResponse
@@ -47,6 +47,7 @@ from sat_simulation.common.models import (
     ProcessorRuntimeStatus,
     ProcessorStage,
     ProcessorVersion,
+    ProcessorWorkspaceCreate,
     ProductLevel,
     ProductManifest,
     ProtocolFrameTrace,
@@ -64,6 +65,7 @@ from sat_simulation.common.models import (
 from sat_simulation.common.orbit import orbit_track, plan_mission_windows
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
+from sat_simulation.processors.templates import builtin_template, source_from_bundle, workspace_bundle
 from sat_simulation.config import Settings, settings
 from sat_simulation.optical.pipeline import ensure_demo_scene, sha256_file
 from sat_simulation.optical.scenes import validate_and_convert_scene
@@ -707,7 +709,7 @@ def enrich_mission(mission: dict[str, Any]) -> dict[str, Any]:
     )
     # The public mission detail is the Ground control-plane view. Product
     # manifests learned from platform events must not be projected into it:
-    # RAW/L0 are only observable in the Optical/Platform debug tabs and are
+    # RAW/L0 are only observable in the Optical/OBC debug tabs and are
     # not ground-accessible until a RESULT_PACKAGE is actually downlinked.
     mission["onboard_products"] = []
     return mission
@@ -974,21 +976,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     async def list_scenes() -> list[dict[str, Any]]:
         return await state.repo.list_scenes()
 
-    @app.post("/api/processors/validate")
-    async def validate_processor(file: UploadFile = File(...)) -> dict[str, Any]:
-        try:
-            definition, digest = inspect_processor_bundle(await file.read())
-        except ProcessorBundleError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        return {"status": "valid", "definition": definition, "sha256": digest}
-
-    @app.post("/internal/processor-executions", status_code=204)
-    async def record_processor_execution(execution: ProcessorExecution) -> None:
-        await state.repo.upsert_processor_execution(execution)
-
-    @app.post("/api/processors", response_model=ProcessorVersion)
-    async def import_processor(file: UploadFile = File(...)) -> ProcessorVersion:
-        content = await file.read()
+    async def stage_processor_bundle(content: bytes, filename: str) -> ProcessorVersion:
         try:
             definition, digest = inspect_processor_bundle(content)
         except ProcessorBundleError as exc:
@@ -1006,7 +994,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 response = await client.post(
                     f"{base}/internal/processors",
                     params={"processor_id": processor_id},
-                    files={"file": (file.filename or "processor.zip", content, "application/zip")},
+                    files={"file": (filename, content, "application/zip")},
                 )
                 response.raise_for_status()
         except Exception as exc:
@@ -1018,8 +1006,95 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             sha256=digest,
             bundle_path=str(target),
             runtime_status=ProcessorRuntimeStatus.READY,
+            runtime_type=("desktop-sandbox" if app_settings.oci_runtime == "desktop-sandbox" else "oci"),
         )
         return await state.repo.add_processor(processor)
+
+    @app.get("/api/processors/templates")
+    async def processor_template(stage: ProcessorStage) -> dict[str, Any]:
+        template = builtin_template(stage)
+        return {
+            "id": template.definition.id,
+            "definition": template.definition,
+            "processor_yaml": template.manifest,
+            "processor_py": template.source,
+            "readonly": True,
+        }
+
+    @app.get("/api/processors/{processor_id}/source")
+    async def processor_source(processor_id: str) -> dict[str, Any]:
+        if processor_id in {"builtin-l0", "builtin-l1"}:
+            template = builtin_template(
+                ProcessorStage.L0 if processor_id.endswith("l0") else ProcessorStage.L1
+            )
+            return {
+                "id": processor_id,
+                "processor_yaml": template.manifest,
+                "processor_py": template.source,
+                "readonly": True,
+            }
+        processor = await state.repo.get_processor(processor_id)
+        if not processor or not processor.bundle_path:
+            raise HTTPException(404, "Processor source not found.")
+        try:
+            manifest, source = source_from_bundle(processor.bundle_path, processor.definition)
+        except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+            raise HTTPException(422, f"Processor source is unreadable: {exc}") from exc
+        return {
+            "id": processor.id,
+            "processor_yaml": manifest,
+            "processor_py": source,
+            "readonly": False,
+        }
+
+    @app.get("/api/processors/{processor_id}/download")
+    async def download_processor(processor_id: str) -> Response:
+        if processor_id in {"builtin-l0", "builtin-l1"}:
+            template = builtin_template(
+                ProcessorStage.L0 if processor_id.endswith("l0") else ProcessorStage.L1
+            )
+            content = workspace_bundle(template.definition, template.source)
+            return Response(
+                content=content,
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{processor_id}.zip"'},
+            )
+        processor = await state.repo.get_processor(processor_id)
+        if not processor or not processor.bundle_path or not Path(processor.bundle_path).is_file():
+            raise HTTPException(404, "Processor bundle not found.")
+        return FileResponse(
+            processor.bundle_path,
+            media_type="application/zip",
+            filename=f"{processor.id}.zip",
+        )
+
+    @app.post("/api/processors/validate")
+    async def validate_processor(file: UploadFile = File(...)) -> dict[str, Any]:
+        try:
+            definition, digest = inspect_processor_bundle(await file.read())
+        except ProcessorBundleError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"status": "valid", "definition": definition, "sha256": digest}
+
+    @app.post("/internal/processor-executions", status_code=204)
+    async def record_processor_execution(execution: ProcessorExecution) -> None:
+        await state.repo.upsert_processor_execution(execution)
+
+    @app.post("/api/processors", response_model=ProcessorVersion)
+    async def import_processor(file: UploadFile = File(...)) -> ProcessorVersion:
+        return await stage_processor_bundle(await file.read(), file.filename or "processor.zip")
+
+    @app.post("/api/processors/workspace", response_model=ProcessorVersion)
+    async def save_processor_workspace(workspace: ProcessorWorkspaceCreate) -> ProcessorVersion:
+        template = builtin_template(workspace.stage)
+        definition = template.definition.model_copy(
+            update={"id": workspace.id, "name": workspace.name, "version": workspace.version}
+        )
+        try:
+            content = workspace_bundle(definition, workspace.source)
+        except ProcessorBundleError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return await stage_processor_bundle(content, f"{workspace.id}-{workspace.version}.zip")
 
     @app.get("/api/processors", response_model=list[ProcessorVersion])
     async def list_processors(stage: ProcessorStage | None = None) -> list[ProcessorVersion]:

@@ -1,4 +1,4 @@
-import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProcessorStage, ProcessorVersion, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioConfig, ScenarioRecord, SceneAsset, SceneRecord, TransferRecord } from "./types";
+import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProcessorSource, ProcessorStage, ProcessorTemplate, ProcessorVersion, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, ScenarioConfig, ScenarioRecord, SceneAsset, SceneRecord, TransferRecord } from "./types";
 import { desktopBridge } from "./desktop";
 
 export const API_BASE = (desktopBridge()?.apiBase ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
@@ -38,6 +38,9 @@ export const api = {
   validateProcessor:(file:File)=>upload<{status:string;definition:ProcessorVersion["definition"];sha256:string}>("/processors/validate",file),
   importProcessor:(file:File)=>upload<ProcessorVersion>("/processors",file),
   processors:(stage?:ProcessorStage)=>request<ProcessorVersion[]>(`/processors${stage?`?stage=${stage}`:""}`),
+  processorTemplate:(stage:ProcessorStage)=>request<ProcessorTemplate>(`/processors/templates?stage=${stage}`),
+  processorSource:(processorId:string)=>request<ProcessorSource>(`/processors/${processorId}/source`),
+  saveProcessorWorkspace:(stage:ProcessorStage,id:string,name:string,version:string,source:string)=>request<ProcessorVersion>("/processors/workspace",{method:"POST",body:JSON.stringify({stage,id,name,version,source})}),
   selectProcessors:(scenarioId:string,l0ProcessorId:string,l1ProcessorId:string)=>request<ScenarioConfig>(`/scenarios/${scenarioId}/processors`,{method:"POST",body:JSON.stringify({l0_processor_id:l0ProcessorId,l1_processor_id:l1ProcessorId})}),
   control:(id:string,action:string,rate?:number)=>request<{clock:ScenarioRecord["clock"]}>(`/scenarios/${id}/control`,{method:"POST",body:JSON.stringify({action,rate})}),
   missions:()=>request<MissionSummary[]>("/missions"),
@@ -61,3 +64,4 @@ export function artifactURL(productId:string){return `${API_BASE}/artifacts/${pr
 export function eventStreamURL(runId:string){return `${API_BASE}/events/stream?run_id=${encodeURIComponent(runId)}`;}
 export function protocolStreamURL(runId:string){return `${API_BASE}/protocol/stream?run_id=${encodeURIComponent(runId)}`;}
 export function nodeArtifactURL(missionId:string,node:NodeKind,key:string){return `${API_BASE}/missions/${missionId}/nodes/${node}/artifacts/${encodeURIComponent(key)}`;}
+export function processorDownloadURL(processorId:string){return `${API_BASE}/processors/${encodeURIComponent(processorId)}/download`;}

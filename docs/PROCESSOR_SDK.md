@@ -1,7 +1,10 @@
 # Python processor SDK v1
 
-A customer processor is a ZIP containing `processor.yaml`, a Python 3.12 entrypoint
-and optional vendored Python modules. ZIP paths must be relative; symlinks, duplicate
+A customer processor is a ZIP containing `processor.yaml` and a Python 3.12 entrypoint.
+The Optical/GPU processor workspace can create this ZIP directly from its read-only
+built-in reference template: copy it into a custom version and implement only the
+functions marked `# to be implemented`. The application owns `main()` and the manifest
+contract. Third-party wheels are not accepted in desktop custom versions. ZIP paths must be relative; symlinks, duplicate
 members, traversal, unknown manifest fields and bundles over the configured limits
 are rejected before the bundle reaches Optical or GPU.
 
@@ -26,8 +29,8 @@ python processor.py --input /workspace/input/request.json \
 ```
 
 `request.json` contains stage metadata and a `files` object whose values point to
-read-only files in `/workspace/input/files`. The program may write only under
-`/workspace/output`. It must atomically finish by writing `result.json`:
+read-only files in the per-execution input directory. The program may write only under
+the per-execution output directory. It must atomically finish by writing `result.json`:
 
 ```json
 {"outputs":{"l0":"l0.npy"}}
@@ -50,3 +53,9 @@ The host ignores processor-provided checksums and manifests. It validates files,
 recomputes SHA-256, creates lineage/quality manifests, thumbnail and STAC, and then
 transmits products on the simulated link. stdout/stderr are truncated and fields
 that resemble keys, tokens, secrets, authorization or passwords are redacted.
+
+On macOS desktop, the app launches this code with a Seatbelt profile: networking,
+the home directory, application data, Docker sockets and child-process creation are
+denied. The only writable location is the execution output directory; timeout, output
+quota and parent-enforced RSS limits are applied. If the app-managed runner fails its
+self-check, the mission blocks rather than executing the ZIP with host privileges.

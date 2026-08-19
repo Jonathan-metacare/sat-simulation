@@ -27,7 +27,14 @@ export interface ProcessorDefinition {
 export interface ProcessorVersion {
   id: string; definition: ProcessorDefinition; sha256: string;
   runtime_status: "builtin" | "ready" | "unavailable" | "running" | "completed" | "failed";
+  runtime_type?: string; source_files?: string[];
   created_at: string;
+}
+export interface ProcessorSource {
+  id: string; processor_yaml: string; processor_py: string; readonly: boolean;
+}
+export interface ProcessorTemplate extends ProcessorSource {
+  definition: ProcessorDefinition;
 }
 export interface SceneRecord {
   id: string; name: string; sha256: string; metadata: SceneAsset & { source_path?: string };

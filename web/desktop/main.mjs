@@ -137,6 +137,9 @@ function sharedEnvironment() {
     SAT_SIM_GPU_HTTP_URL: `http://127.0.0.1:${ports.gpu}`,
     SAT_SIM_GROUND_HTTP_URL: `http://127.0.0.1:${ports.ground}`,
     SAT_SIM_OPTICAL_HTTP_URL: `http://127.0.0.1:${ports.optical}`,
+    // Desktop custom processors use the application-managed macOS sandbox.
+    // A non-macOS build fails closed instead of silently using host Python.
+    SAT_SIM_OCI_RUNTIME: "desktop-sandbox",
     SAT_SIM_LLM_API_URL: settings.activeAiMode === "llm" ? settings.llmApiUrl : "",
     SAT_SIM_LLM_MODEL: settings.llmModel,
     SAT_SIM_LLM_API_KEY: settings.activeAiMode === "llm" ? settings.llmApiKey : "",

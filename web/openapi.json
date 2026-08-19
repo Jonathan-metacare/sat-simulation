@@ -328,6 +328,124 @@
         }
       }
     },
+    "/api/processors/templates": {
+      "get": {
+        "summary": "Processor Template",
+        "operationId": "processor_template_api_processors_templates_get",
+        "parameters": [
+          {
+            "name": "stage",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProcessorStage"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Processor Template Api Processors Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processors/{processor_id}/source": {
+      "get": {
+        "summary": "Processor Source",
+        "operationId": "processor_source_api_processors__processor_id__source_get",
+        "parameters": [
+          {
+            "name": "processor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Processor Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Processor Source Api Processors  Processor Id  Source Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processors/{processor_id}/download": {
+      "get": {
+        "summary": "Download Processor",
+        "operationId": "download_processor_api_processors__processor_id__download_get",
+        "parameters": [
+          {
+            "name": "processor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Processor Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/processors/validate": {
       "post": {
         "summary": "Validate Processor",
@@ -468,6 +586,44 @@
                     "$ref": "#/components/schemas/ProcessorVersion"
                   },
                   "title": "Response List Processors Api Processors Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processors/workspace": {
+      "post": {
+        "summary": "Save Processor Workspace",
+        "operationId": "save_processor_workspace_api_processors_workspace_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessorWorkspaceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessorVersion"
                 }
               }
             }
@@ -2777,6 +2933,33 @@
             "type": "object",
             "title": "Resource Limits"
           },
+          "runtime_type": {
+            "type": "string",
+            "title": "Runtime Type",
+            "default": "oci"
+          },
+          "sandbox_profile_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sandbox Profile Version"
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
           "stdout": {
             "type": "string",
             "title": "Stdout",
@@ -2846,6 +3029,18 @@
             "$ref": "#/components/schemas/ProcessorRuntimeStatus",
             "default": "ready"
           },
+          "runtime_type": {
+            "type": "string",
+            "title": "Runtime Type",
+            "default": "oci"
+          },
+          "source_files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Files"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -2858,6 +3053,46 @@
           "sha256"
         ],
         "title": "ProcessorVersion"
+      },
+      "ProcessorWorkspaceCreate": {
+        "properties": {
+          "stage": {
+            "$ref": "#/components/schemas/ProcessorStage"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,79}$",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage",
+          "id",
+          "name",
+          "version",
+          "source"
+        ],
+        "title": "ProcessorWorkspaceCreate",
+        "description": "A UI-authored source revision. The host owns the resulting manifest."
       },
       "ProductLevel": {
         "type": "string",

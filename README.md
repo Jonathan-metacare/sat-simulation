@@ -10,10 +10,10 @@ HTTP 适配器，未配置时第五步阻塞，不生成虚假模型结果。
 ## 系统边界
 
 ```text
-Next.js Web -> Ground API --SIMF uplink--> Platform Node
+Next.js Web -> Ground API --SIMF uplink--> OBC Node
                                       |--Payload Bus--> Optical Node --RAW/L0-->
                                       |--Virtual GTX--> GPU/Jetson Node --L1/AI-->
-Next.js Web <- Ground API <--SIMF downlink-- Platform Node
+Next.js Web <- Ground API <--SIMF downlink-- OBC Node
 ```
 
 - 地面站是唯一公开 API；星务、光学和 GPU 只开放内部健康/管理接口。
@@ -82,6 +82,7 @@ uv run python scripts/demo_mission.py
 ## 主要公共 API
 
 - `POST /api/scenes/validate|import`：预检并导入 GeoTIFF/PNG/JPEG 光学输入。
+- `GET /api/processors/templates`、`GET /api/processors/{id}/source`、`POST /api/processors/workspace`：处理器工作区模板、源码查看与应用内自定义版本保存。
 - `POST/GET /api/processors`：严格校验、注册和选择 Python 3.12 ZIP 处理器。
 - `POST/GET /api/scenarios`：创建或查看版本化场景。
 - `POST /api/scenarios/{id}/control`：运行、暂停、单步、倍率和新 run。
@@ -120,7 +121,7 @@ Provider 阻塞真实性、步骤幂等性和持久化重试状态。
 
 - `sat_simulation/common`：时钟、协议、链路、轨姿和公共模型。
 - `sat_simulation/optical`：场景校验、探测器 RAW 与内置产品处理。
-- `sat_simulation/processors`：自定义处理器 ZIP SDK 校验和 OCI 沙箱运行器。
+- `sat_simulation/processors`：自定义处理器 ZIP SDK、模板与 macOS Seatbelt/服务器 OCI 执行器。
 - `sat_simulation/payload`：检测与语言 Provider 契约。
 - `sat_simulation/services`：ground、platform、optical、GPU 四个独立节点进程。
 - `web`：Next.js/Cesium 地面站。

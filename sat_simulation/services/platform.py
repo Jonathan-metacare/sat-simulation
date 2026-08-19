@@ -731,7 +731,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         yield
         await state.close()
 
-    app = FastAPI(title="Satellite Platform Node", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Satellite OBC Node", version=__version__, lifespan=lifespan)
     app.state.platform = state
 
     @app.get("/health")

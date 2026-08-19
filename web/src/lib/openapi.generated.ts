@@ -106,6 +106,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/processors/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Processor Template */
+        get: operations["processor_template_api_processors_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/processors/{processor_id}/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Processor Source */
+        get: operations["processor_source_api_processors__processor_id__source_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/processors/{processor_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Processor */
+        get: operations["download_processor_api_processors__processor_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/processors/validate": {
         parameters: {
             query?: never;
@@ -152,6 +203,23 @@ export interface paths {
         put?: never;
         /** Import Processor */
         post: operations["import_processor_api_processors_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/processors/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save Processor Workspace */
+        post: operations["save_processor_workspace_api_processors_workspace_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1128,6 +1196,15 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Runtime Type
+             * @default oci
+             */
+            runtime_type: string;
+            /** Sandbox Profile Version */
+            sandbox_profile_version?: string | null;
+            /** Block Reason */
+            block_reason?: string | null;
+            /**
              * Stdout
              * @default
              */
@@ -1160,10 +1237,32 @@ export interface components {
             /** @default ready */
             runtime_status: components["schemas"]["ProcessorRuntimeStatus"];
             /**
+             * Runtime Type
+             * @default oci
+             */
+            runtime_type: string;
+            /** Source Files */
+            source_files?: string[];
+            /**
              * Created At
              * Format: date-time
              */
             created_at?: string;
+        };
+        /**
+         * ProcessorWorkspaceCreate
+         * @description A UI-authored source revision. The host owns the resulting manifest.
+         */
+        ProcessorWorkspaceCreate: {
+            stage: components["schemas"]["ProcessorStage"];
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+            /** Source */
+            source: string;
         };
         /**
          * ProductLevel
@@ -1831,6 +1930,103 @@ export interface operations {
             };
         };
     };
+    processor_template_api_processors_templates_get: {
+        parameters: {
+            query: {
+                stage: components["schemas"]["ProcessorStage"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    processor_source_api_processors__processor_id__source_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                processor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_processor_api_processors__processor_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                processor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     validate_processor_api_processors_validate_post: {
         parameters: {
             query?: never;
@@ -1938,6 +2134,39 @@ export interface operations {
         requestBody: {
             content: {
                 "multipart/form-data": components["schemas"]["Body_import_processor_api_processors_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessorVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_processor_workspace_api_processors_workspace_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProcessorWorkspaceCreate"];
             };
         };
         responses: {

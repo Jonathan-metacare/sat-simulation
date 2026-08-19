@@ -137,7 +137,19 @@ class ProcessorVersion(BaseModel):
     sha256: str = Field(min_length=64, max_length=64)
     bundle_path: str | None = None
     runtime_status: ProcessorRuntimeStatus = ProcessorRuntimeStatus.READY
+    runtime_type: str = "oci"
+    source_files: list[str] = Field(default_factory=lambda: ["processor.yaml", "processor.py"])
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class ProcessorWorkspaceCreate(BaseModel):
+    """A UI-authored source revision. The host owns the resulting manifest."""
+
+    stage: ProcessorStage
+    id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,79}$")
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=40)
+    source: str = Field(min_length=1, max_length=256 * 1024)
 
 
 class ProcessorExecution(BaseModel):
@@ -153,6 +165,9 @@ class ProcessorExecution(BaseModel):
     input_summary: dict[str, Any] = Field(default_factory=dict)
     output_summary: dict[str, Any] = Field(default_factory=dict)
     resource_limits: dict[str, Any] = Field(default_factory=dict)
+    runtime_type: str = "oci"
+    sandbox_profile_version: str | None = None
+    block_reason: str | None = None
     stdout: str = ""
     stderr: str = ""
 

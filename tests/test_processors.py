@@ -3,11 +3,13 @@ from __future__ import annotations
 import io
 import stat
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from sat_simulation.common.models import ProcessorStage
-from sat_simulation.processors import ProcessorBundleError, inspect_processor_bundle
+from sat_simulation.processors import ProcessorBundleError, ProcessorRunner, inspect_processor_bundle
+from sat_simulation.processors.templates import builtin_template, source_from_bundle, workspace_bundle
 
 
 def bundle(manifest: str, files: dict[str, bytes] | None = None) -> bytes:
@@ -56,3 +58,57 @@ def test_processor_bundle_rejects_traversal_and_symlink() -> None:
         archive.writestr(link, "target.py")
     with pytest.raises(ProcessorBundleError, match="Symbolic|symbolic"):
         inspect_processor_bundle(output.getvalue())
+
+    with pytest.raises(ProcessorBundleError, match="wheels"):
+        inspect_processor_bundle(bundle(MANIFEST, {"processor.py": b"", "wheels/foo.whl": b"x"}))
+
+
+@pytest.mark.parametrize("stage", [ProcessorStage.L0, ProcessorStage.L1])
+def test_builtin_workspace_templates_are_readonly_reference_bundles(stage: ProcessorStage) -> None:
+    template = builtin_template(stage)
+    assert "def main()" in template.source
+    assert "# to be implemented" in template.source
+    assert "NotImplementedError" in template.source
+    content = workspace_bundle(template.definition, template.source)
+    definition, _digest = inspect_processor_bundle(content)
+    assert definition.stage == stage
+
+
+def test_workspace_bundle_rejects_invalid_python_and_round_trips_source(tmp_path: Path) -> None:
+    template = builtin_template(ProcessorStage.L0)
+    with pytest.raises(ProcessorBundleError, match="syntax error"):
+        workspace_bundle(template.definition, "def broken(:\n")
+    bundle_path = tmp_path / "processor.zip"
+    bundle_path.write_bytes(workspace_bundle(template.definition, template.source))
+    manifest, source = source_from_bundle(str(bundle_path), template.definition)
+    assert "stage: l0" in manifest
+    assert source == template.source
+
+
+@pytest.mark.asyncio
+async def test_macos_desktop_runner_executes_only_inside_seatbelt(tmp_path: Path) -> None:
+    runner = ProcessorRunner(runtime="desktop-sandbox")
+    if not await runner.available():
+        pytest.skip("macOS Seatbelt is unavailable on this platform")
+    definition = builtin_template(ProcessorStage.L0).definition.model_copy(
+        update={"id": "seatbelt-smoke", "timeout_seconds": 10, "memory_mb": 2048}
+    )
+    source = builtin_template(ProcessorStage.L0).source
+    source = source.replace(
+        '    # to be implemented\n    raise NotImplementedError("Implement RAW packet validation")',
+        "    return None",
+    ).replace(
+        '    # to be implemented\n    raise NotImplementedError("Implement RAW to L0 reconstruction")',
+        "    return np.zeros((1, 1, 1), dtype=np.uint16)",
+    )
+    bundle_path = tmp_path / "processor.zip"
+    bundle_path.write_bytes(workspace_bundle(definition, source))
+    raw_path = tmp_path / "raw.bin"
+    raw_path.write_bytes(b"raw")
+    result = await runner.run(
+        bundle_path=bundle_path,
+        request={"schema_version": 1},
+        input_files={"raw": raw_path},
+        execution_dir=tmp_path / "execution",
+    )
+    assert (result.output_dir / "l0.npy").is_file()
