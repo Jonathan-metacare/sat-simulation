@@ -731,6 +731,69 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         allow_headers=["*"],
     )
 
+    async def initialized_mission_for_configuration(
+        scenario_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the pre-flight mission, or reject an already-frozen configuration."""
+        active_id = await state.repo.active_mission_for_scenario(scenario_id)
+        if not active_id:
+            return None
+        mission = await state.repo.get_mission(active_id)
+        if not mission:
+            return None
+        if (
+            mission["phase"] != MissionPhase.INITIALIZED
+            or mission["execution_state"] != ExecutionState.WAITING
+        ):
+            raise HTTPException(
+                409,
+                "任务已开始执行，场景资产和 L0/L1 处理器版本已冻结。",
+            )
+        return mission
+
+    async def processor_snapshots_for(scenario: ScenarioConfig) -> dict[str, dict[str, Any]]:
+        snapshots: dict[str, dict[str, Any]] = {}
+        for stage, processor_id in (
+            (ProcessorStage.L0, scenario.l0_processor_id),
+            (ProcessorStage.L1, scenario.l1_processor_id),
+        ):
+            if processor_id.startswith("builtin-"):
+                snapshots[stage.value] = {
+                    "id": processor_id,
+                    "version": __version__,
+                    "sha256": "builtin",
+                }
+                continue
+            processor = await state.repo.get_processor(processor_id)
+            if not processor or processor.definition.stage != stage:
+                raise HTTPException(409, f"Scenario processor is unavailable: {processor_id}")
+            snapshots[stage.value] = processor.model_dump(mode="json")
+        return snapshots
+
+    async def refresh_initialized_command(
+        mission: dict[str, Any], scenario: ScenarioConfig
+    ) -> None:
+        """Freeze the latest pre-flight image and processor choices into the mission."""
+        scene_record = await state.repo.get_scene(scenario.scene_asset_id or scenario.scene_id)
+        if not scene_record:
+            raise HTTPException(409, "Scenario image is not ready. Import it in Optical first.")
+        try:
+            asset = SceneAsset.model_validate(scene_record["metadata"])
+        except ValidationError as exc:
+            raise HTTPException(409, "Scenario asset metadata is incomplete; import it again.") from exc
+        command: MissionCommand = mission["command"].model_copy(deep=True)
+        command.scene_id = scenario.scene_id
+        command.scene_asset_id = asset.id
+        command.scene_asset = asset
+        command.l0_processor_id = scenario.l0_processor_id
+        command.l1_processor_id = scenario.l1_processor_id
+        command.processor_snapshots = await processor_snapshots_for(scenario)
+        command.scenario_snapshot = scenario.model_copy(deep=True)
+        try:
+            await state.repo.update_mission_command(command)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
@@ -825,6 +888,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         crs: str = Query(default="EPSG:4326"),
     ) -> dict[str, Any]:
         scenario_config: ScenarioConfig | None = None
+        initialized_mission: dict[str, Any] | None = None
         if scenario_id:
             stored = await state.repo.get_scenario(scenario_id)
             if not stored:
@@ -832,6 +896,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             scenario_config, _clock = stored
             if scenario_config.scene_id != scene_id:
                 raise HTTPException(422, "scene_id does not match the selected scenario.")
+            initialized_mission = await initialized_mission_for_configuration(scenario_id)
         temporary_path = state.scene_dir / f"{new_id('scene_import')}.tif"
         asset, content = await prepare_scene_asset(
             file,
@@ -894,6 +959,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             scenario_config.scene_ready = True
             scenario_config.scene_asset_id = asset.id
             await state.repo.update_scenario_config(scenario_config)
+            if initialized_mission:
+                await refresh_initialized_command(initialized_mission, scenario_config)
         return {
             "id": asset.id,
             "sha256": asset.canonical_sha256,
@@ -968,9 +1035,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         stored = await state.repo.get_scenario(scenario_id)
         if not stored:
             raise HTTPException(404, "Scenario not found.")
-        active = await state.repo.active_mission_for_scenario(scenario_id)
-        if active:
-            raise HTTPException(409, f"场景已有非终态任务 {active}")
+        initialized_mission = await initialized_mission_for_configuration(scenario_id)
         config, _clock = stored
         for field, stage in (
             ("l0_processor_id", ProcessorStage.L0),
@@ -983,6 +1048,8 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                     raise HTTPException(422, f"Invalid {stage.value} processor: {selected}")
             setattr(config, field, selected)
         await state.repo.update_scenario_config(config)
+        if initialized_mission:
+            await refresh_initialized_command(initialized_mission, config)
         return config
 
     @app.post("/api/scenarios/import/yaml")

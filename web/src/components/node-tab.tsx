@@ -51,6 +51,11 @@ export function NodeTab({ node, mission, providerHealth, activeAiMode, gtxLink, 
     : snapshot?.observation_notice?.startsWith("节点当前不可达")
       ? t("node.unreachableNotice")
       : snapshot?.observation_notice;
+  const configurationLocked = Boolean(
+    mission
+      && !["completed", "cancelled"].includes(mission.execution_state)
+      && (mission.phase !== "initialized" || mission.execution_state !== "waiting"),
+  );
   return <div className="space-y-4">
     <section className="panel rounded-2xl p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -81,8 +86,8 @@ export function NodeTab({ node, mission, providerHealth, activeAiMode, gtxLink, 
       {mission && mission.ai_mode !== activeAiMode && <p className="mt-2 text-[10px] leading-4 text-orange-300">{locale === "zh" ? `当前任务固定使用 ${mission.ai_mode.toUpperCase()}；设置中的 ${activeAiMode.toUpperCase()} 将用于后续新任务。` : `The current mission remains ${mission.ai_mode.toUpperCase()}; ${activeAiMode.toUpperCase()} applies to subsequent missions.`}</p>}
     </section>}
 
-    {node === "optical" && scenario && <OpticalConfiguration scenario={scenario} locale={locale} onChanged={onConfigurationChanged} />}
-    {node === "gpu" && scenario && <ProcessorConfiguration stage="l1" scenario={scenario} locale={locale} onChanged={onConfigurationChanged} />}
+    {node === "optical" && scenario && <OpticalConfiguration scenario={scenario} locale={locale} onChanged={onConfigurationChanged} locked={configurationLocked} frozenAssetName={mission?.command.scene_asset?.source_name ?? mission?.command.scene_asset_id} frozenL0Processor={mission?.command.l0_processor_id} />}
+    {node === "gpu" && scenario && <ProcessorConfiguration stage="l1" scenario={scenario} locale={locale} onChanged={onConfigurationChanged} locked={configurationLocked} frozenProcessorId={mission?.command.l1_processor_id} />}
 
     <section className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
       <div className="panel rounded-2xl p-4">
@@ -100,7 +105,7 @@ export function NodeTab({ node, mission, providerHealth, activeAiMode, gtxLink, 
   </div>;
 }
 
-function OpticalConfiguration({ scenario, locale, onChanged }: { scenario: ScenarioConfig; locale: Locale; onChanged?: () => void }) {
+function OpticalConfiguration({ scenario, locale, onChanged, locked = false, frozenAssetName, frozenL0Processor }: { scenario: ScenarioConfig; locale: Locale; onChanged?: () => void; locked?: boolean; frozenAssetName?: string; frozenL0Processor?: string }) {
   const [file, setFile] = useState<File>();
   const [centerLatitude, setCenterLatitude] = useState("39.9042");
   const [centerLongitude, setCenterLongitude] = useState("116.4074");
@@ -130,22 +135,27 @@ function OpticalConfiguration({ scenario, locale, onChanged }: { scenario: Scena
     <section className="panel rounded-2xl p-4">
       <div className="mb-3 flex items-center gap-2 text-sm text-cyan-100"><Upload size={15} />{locale === "zh" ? "光学场景输入" : "Optical Scene Input"}</div>
       <p className="mb-3 text-xs leading-5 text-slate-500">{locale === "zh" ? "GeoTIFF 保留原始地理参考；PNG/JPEG 会按下方参数转换为版本化 16-bit GeoTIFF。导入图片是仿真环境输入，不是 RAW。" : "GeoTIFF keeps its georeference. PNG/JPEG is converted to a versioned 16-bit GeoTIFF using the fields below. An imported image is simulation input, not RAW."}</p>
-      <div className="grid gap-3 lg:grid-cols-[1.3fr_repeat(4,minmax(0,.7fr))_auto]">
-        <input type="file" accept=".tif,.tiff,.png,.jpg,.jpeg,image/tiff,image/png,image/jpeg" onChange={(event) => setFile(event.target.files?.[0])} className="min-w-0 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300 file:mr-2 file:border-0 file:bg-transparent file:text-cyan-300" />
-        <Input value={centerLatitude} onChange={setCenterLatitude} label={locale === "zh" ? "中心纬度" : "Center lat"} disabled={Boolean(isRaster)} />
-        <Input value={centerLongitude} onChange={setCenterLongitude} label={locale === "zh" ? "中心经度" : "Center lon"} disabled={Boolean(isRaster)} />
-        <Input value={pixelSize} onChange={setPixelSize} label={locale === "zh" ? "像元大小" : "Pixel size"} disabled={Boolean(isRaster)} />
-        <Input value={crs} onChange={setCrs} label="CRS" disabled={Boolean(isRaster)} />
-        <button disabled={!file || busy} onClick={() => void importScene()} className="rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs text-cyan-100 disabled:opacity-40">{busy ? (locale === "zh" ? "校验并导入中…" : "Validating…") : (locale === "zh" ? "预检并导入" : "Validate & Import")}</button>
+      {locked && <p className="mb-3 rounded-lg border border-orange-300/20 bg-orange-300/[.07] px-3 py-2 text-xs text-orange-200">{locale === "zh" ? `当前任务已冻结场景资产：${frozenAssetName ?? "未知资产"}；L0 处理器：${frozenL0Processor ?? "builtin-l0"}。` : `This mission has frozen scene asset: ${frozenAssetName ?? "unknown asset"}; L0 processor: ${frozenL0Processor ?? "builtin-l0"}.`}</p>}
+      <div className="grid min-w-0 grid-cols-2 gap-4">
+        <article className="min-w-0 rounded-xl border border-emerald-300/45 bg-emerald-300/[.08] p-4">
+          <div className="flex items-start justify-between gap-3"><div><h4 className="text-sm font-medium text-cyan-100">16-bit GeoTIFF</h4><p className="mt-2 text-xs leading-5 text-slate-500">{locale === "zh" ? "保留文件内的 CRS 和地理参考；无需额外定位参数。" : "Keeps the CRS and georeference embedded in the file; no extra location fields."}</p></div>{isRaster && <span className="shrink-0 rounded-full border border-emerald-300/30 px-2 py-1 text-[10px] text-emerald-300">{locale === "zh" ? "已选择" : "SELECTED"}</span>}</div>
+          <div className="mt-4 flex flex-wrap items-center gap-2"><input id="optical-geotiff" disabled={locked} type="file" accept=".tif,.tiff,image/tiff" onChange={(event) => setFile(event.target.files?.[0])} className="sr-only" /><label htmlFor="optical-geotiff" className={`rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 transition ${locked ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:border-emerald-300/50"}`}>{locale === "zh" ? "选择 GeoTIFF" : "Choose GeoTIFF"}</label>{isRaster && file && <span className="max-w-40 truncate text-[10px] text-slate-500" title={file.name}>{file.name}</span>}<button disabled={locked || !isRaster || busy} onClick={() => void importScene()} className="rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{busy ? (locale === "zh" ? "导入中…" : "Importing…") : (locale === "zh" ? "校验并导入" : "Validate & Import")}</button></div>
+        </article>
+        <article className="min-w-0 rounded-xl border border-emerald-300/45 bg-emerald-300/[.08] p-4">
+          <div className="flex items-start justify-between gap-3"><div><h4 className="text-sm font-medium text-cyan-100">PNG / JPEG</h4><p className="mt-2 text-xs leading-5 text-slate-500">{locale === "zh" ? "需要填写地理定位参数；导入后转换为版本化 16-bit GeoTIFF。" : "Requires geolocation parameters and is converted to a versioned 16-bit GeoTIFF."}</p></div>{file && !isRaster && <span className="shrink-0 rounded-full border border-emerald-300/30 px-2 py-1 text-[10px] text-emerald-300">{locale === "zh" ? "已选择" : "SELECTED"}</span>}</div>
+          <div className="mt-4 flex flex-wrap items-center gap-2"><input id="optical-image" disabled={locked} type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" onChange={(event) => setFile(event.target.files?.[0])} className="sr-only" /><label htmlFor="optical-image" className={`rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 transition ${locked ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:border-emerald-300/50"}`}>{locale === "zh" ? "选择图片" : "Choose image"}</label>{file && !isRaster && <span className="max-w-32 truncate text-[10px] text-slate-500" title={file.name}>{file.name}</span>}</div>
+          <div className="mt-3 grid grid-cols-2 gap-2"><Input value={centerLatitude} onChange={setCenterLatitude} label={locale === "zh" ? "中心纬度" : "Center lat"} disabled={locked || Boolean(isRaster)} /><Input value={centerLongitude} onChange={setCenterLongitude} label={locale === "zh" ? "中心经度" : "Center lon"} disabled={locked || Boolean(isRaster)} /><Input value={pixelSize} onChange={setPixelSize} label={locale === "zh" ? "像元大小" : "Pixel size"} disabled={locked || Boolean(isRaster)} /><Input value={crs} onChange={setCrs} label="CRS" disabled={locked || Boolean(isRaster)} /></div>
+          <button disabled={locked || !file || Boolean(isRaster) || busy} onClick={() => void importScene()} className="mt-3 rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{busy ? (locale === "zh" ? "导入中…" : "Importing…") : (locale === "zh" ? "校验、转换并导入" : "Validate, convert & import")}</button>
+        </article>
       </div>
       <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500"><span>{locale === "zh" ? "活动资产" : "Active asset"}: {scenario.scene_asset_id ?? scenario.scene_id}</span><span>SHA / CRC {locale === "zh" ? "由 Optical 与 Ground 双端校验" : "verified by Optical and Ground"}</span></div>
       {status && <div className="mt-3 rounded-lg border border-cyan-300/15 bg-black/15 px-3 py-2 text-xs text-slate-300">{status}</div>}
     </section>
-    <ProcessorConfiguration stage="l0" scenario={scenario} locale={locale} onChanged={onChanged} />
+    <ProcessorConfiguration stage="l0" scenario={scenario} locale={locale} onChanged={onChanged} locked={locked} frozenProcessorId={frozenL0Processor} />
   </>;
 }
 
-function ProcessorConfiguration({ stage, scenario, locale, onChanged }: { stage: ProcessorStage; scenario: ScenarioConfig; locale: Locale; onChanged?: () => void }) {
+function ProcessorConfiguration({ stage, scenario, locale, onChanged, locked = false, frozenProcessorId }: { stage: ProcessorStage; scenario: ScenarioConfig; locale: Locale; onChanged?: () => void; locked?: boolean; frozenProcessorId?: string }) {
   const [processors, setProcessors] = useState<ProcessorVersion[]>([]);
   const [selected, setSelected] = useState(stage === "l0" ? scenario.l0_processor_id : scenario.l1_processor_id);
   const [bundle, setBundle] = useState<File>();
@@ -154,6 +164,7 @@ function ProcessorConfiguration({ stage, scenario, locale, onChanged }: { stage:
   useEffect(() => { void api.processors(stage).then(setProcessors).catch((cause) => setStatus(String(cause))); }, [stage]);
   useEffect(() => setSelected(stage === "l0" ? scenario.l0_processor_id : scenario.l1_processor_id), [scenario, stage]);
   const builtin = stage === "l0" ? "builtin-l0" : "builtin-l1";
+  const customActive = selected !== builtin;
   const save = async (processorId = selected) => {
     setBusy(true); setStatus(undefined);
     try {
@@ -177,12 +188,19 @@ function ProcessorConfiguration({ stage, scenario, locale, onChanged }: { stage:
   };
   return <section className="panel rounded-2xl p-4">
     <div className="mb-3 flex items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm text-cyan-100"><FileArchive size={15} />{stage.toUpperCase()} {locale === "zh" ? "处理器" : "Processor"}</h3><span className="rounded border border-orange-300/20 bg-orange-300/[.07] px-2 py-1 text-[10px] text-orange-200">OCI SANDBOX</span></div>
-    <p className="mb-3 text-xs leading-5 text-slate-500">{locale === "zh" ? `内置 ${stage.toUpperCase()} 不依赖 Docker。自定义 Python 3.12 ZIP 仅在受限 OCI 容器中运行；运行时不可用时任务会 blocked，不会在宿主机降级执行。` : `Built-in ${stage.toUpperCase()} does not require Docker. Custom Python 3.12 ZIP bundles run only inside the restricted OCI sandbox; without a runtime, the mission is blocked and never falls back to host execution.`}</p>
-    <div className="grid gap-3 md:grid-cols-[1fr_auto_1fr_auto]">
-      <select value={selected} onChange={(event) => setSelected(event.target.value)} className="min-w-0 rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2 text-xs text-slate-200"><option value={builtin}>{builtin}</option>{processors.map((item) => <option key={item.id} value={item.id}>{item.definition.name} · {item.definition.version}</option>)}</select>
-      <button disabled={busy} onClick={() => void save()} className="rounded-lg border border-cyan-300/25 px-4 py-2 text-xs text-cyan-200 disabled:opacity-40">{locale === "zh" ? "选择" : "Select"}</button>
-      <input type="file" accept=".zip,application/zip" onChange={(event) => setBundle(event.target.files?.[0])} className="min-w-0 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300 file:mr-2 file:border-0 file:bg-transparent file:text-cyan-300" />
-      <button disabled={!bundle || busy} onClick={() => void upload()} className="rounded-lg border border-cyan-300/25 px-4 py-2 text-xs text-cyan-200 disabled:opacity-40">{locale === "zh" ? "预检、上传并选择" : "Validate, Upload & Select"}</button>
+    <p className="mb-3 text-xs leading-5 text-slate-500">{locale === "zh" ? `为后续新任务选择 ${stage.toUpperCase()} 处理方式。当前任务始终使用创建时冻结的处理器版本。` : `Choose the ${stage.toUpperCase()} processing mode for subsequent missions. The current mission always uses its frozen processor version.`}</p>
+    {locked && <p className="mb-3 rounded-lg border border-orange-300/20 bg-orange-300/[.07] px-3 py-2 text-xs text-orange-200">{locale === "zh" ? `当前任务已冻结 ${stage.toUpperCase()} 处理器：${frozenProcessorId ?? builtin}。` : `This mission has frozen ${stage.toUpperCase()} processor: ${frozenProcessorId ?? builtin}.`}</p>}
+    <div className="grid min-w-0 grid-cols-2 gap-4">
+      <article className={`min-w-0 rounded-xl border p-4 transition ${!customActive ? "border-emerald-300/45 bg-emerald-300/[.08]" : "border-white/[.08] bg-black/[.12]"}`}>
+        <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex items-center gap-2 text-sm font-medium text-cyan-100"><ShieldCheck size={16} className="shrink-0 text-emerald-300" />{locale === "zh" ? "Built-in · 内置处理" : "Built-in Processing"}</div><p className="mt-2 text-xs leading-5 text-slate-500">{locale === "zh" ? `使用 ${stage === "l0" ? "Optical" : "GPU Payload"} 内部可信处理链，不运行用户代码，不需要 Docker。` : `Runs the trusted internal ${stage === "l0" ? "Optical" : "GPU Payload"} pipeline. No user code, no Docker required.`}</p></div><span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${!customActive ? "border-emerald-300/30 text-emerald-300" : "border-white/10 text-slate-500"}`}>{!customActive ? (locale === "zh" ? "默认生效" : "DEFAULT") : (locale === "zh" ? "备用" : "FALLBACK")}</span></div>
+        <div className="mt-4 flex flex-wrap items-center gap-2"><code className="rounded bg-black/20 px-2 py-1 text-[10px] text-slate-400">{builtin}</code>{customActive ? <button disabled={locked || busy} onClick={() => void save(builtin)} className="rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{locale === "zh" ? "清除自定义" : "Clear custom"}</button> : <span className="text-[10px] text-slate-500">{locale === "zh" ? "未配置自定义处理器时自动使用" : "Used automatically when custom is not configured"}</span>}</div>
+      </article>
+      <article className="min-w-0 rounded-xl border border-emerald-300/45 bg-emerald-300/[.08] p-4 transition">
+        <div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2 text-sm font-medium text-cyan-100"><FileArchive size={16} className="text-emerald-300" />{locale === "zh" ? "Customized · 自定义处理" : "Customized Processing"}</div><p className="mt-2 text-xs leading-5 text-slate-500">{locale === "zh" ? "上传 Python 3.12 ZIP。代码仅在无网络、非 root、资源受限的 OCI 容器中执行。" : "Upload a Python 3.12 ZIP. Code runs only in a network-disabled, non-root, resource-limited OCI container."}</p></div>{selected !== builtin && <span className="rounded-full border border-emerald-300/30 px-2 py-1 text-[10px] text-emerald-300">{locale === "zh" ? "当前使用" : "ACTIVE"}</span>}</div>
+        <div className="mt-4"><div className="mb-1.5 text-[10px] font-medium tracking-wider text-slate-500 uppercase">{locale === "zh" ? "1 · 选择已导入处理器" : "1 · Select an uploaded processor"}</div><div className="flex flex-wrap items-center gap-2"><select disabled={locked} value={customActive ? selected : ""} onChange={(event) => setSelected(event.target.value)} className="w-52 max-w-full rounded-lg border border-emerald-300/45 bg-sky-50/90 px-3 py-1.5 text-xs text-slate-700 shadow-sm disabled:opacity-40 dark:bg-slate-900/80 dark:text-slate-100"><option value="" disabled>{locale === "zh" ? "选择已上传的处理器" : "Choose uploaded processor"}</option>{processors.map((item) => <option key={item.id} value={item.id}>{item.definition.name} · {item.definition.version}</option>)}</select><button disabled={locked || busy || !customActive} onClick={() => void save()} className="rounded-lg border border-emerald-300/30 px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{locale === "zh" ? "启用" : "Activate"}</button></div></div>
+        <div className="mt-3"><div className="mb-1.5 text-[10px] font-medium tracking-wider text-slate-500 uppercase">{locale === "zh" ? "2 · 导入新的处理器 ZIP" : "2 · Import a new processor ZIP"}</div><div className="flex flex-wrap items-center gap-2"><input id={`processor-bundle-${stage}`} disabled={locked} type="file" accept=".zip,application/zip" onChange={(event) => setBundle(event.target.files?.[0])} className="sr-only" /><label htmlFor={`processor-bundle-${stage}`} className={`rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 transition ${locked ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:border-emerald-300/50"}`}>{locale === "zh" ? "选择 ZIP 文件" : "Choose ZIP"}</label>{bundle && <span className="max-w-36 truncate text-[10px] text-slate-400" title={bundle.name}>{bundle.name}</span>}<button disabled={locked || !bundle || busy} onClick={() => void upload()} className="rounded-lg border border-emerald-300/30 bg-emerald-300/[.08] px-3 py-1.5 text-xs text-emerald-200 disabled:opacity-40">{locale === "zh" ? "校验、导入并启用" : "Validate, import & activate"}</button></div></div>
+        <div className="mt-3 text-[10px] leading-4 text-orange-300">{locale === "zh" ? "需要本机 Docker/兼容 OCI Runtime 与 processor-python 镜像；不可用时任务会停在 blocked。" : "Requires local Docker/compatible OCI runtime and the processor-python image; unavailable runtime blocks the mission."}</div>
+      </article>
     </div>
     {status && <div className="mt-3 rounded-lg border border-cyan-300/15 bg-black/15 px-3 py-2 text-xs text-slate-300">{status}</div>}
   </section>;

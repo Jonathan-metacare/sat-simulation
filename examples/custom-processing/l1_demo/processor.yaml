@@ -1,0 +1,10 @@
+schema_version: 1
+id: demo-custom-l1
+name: Demo custom L1 GeoTIFF processor
+version: 1.0.0
+stage: l1
+entrypoint: processor.py
+timeout_seconds: 60
+cpu_limit: 1.0
+memory_mb: 1024
+output_limit_mb: 256

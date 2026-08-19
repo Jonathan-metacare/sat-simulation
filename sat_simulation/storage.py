@@ -317,6 +317,18 @@ class Repository:
                 row.error = error
                 row.updated_at = now_utc()
 
+    async def update_mission_command(self, command: MissionCommand) -> None:
+        """Replace an initialized mission's pre-flight configuration snapshot."""
+        async with self.session() as session:
+            row = await session.get(MissionRow, command.id, with_for_update=True)
+            if not row:
+                raise KeyError(command.id)
+            if row.phase != MissionPhase.INITIALIZED or row.execution_state != ExecutionState.WAITING:
+                raise RuntimeError("mission configuration is frozen after its first advance")
+            row.command_json = command.model_dump_json()
+            row.ai_mode = command.ai_mode
+            row.updated_at = now_utc()
+
     async def active_mission_for_scenario(self, scenario_id: str) -> str | None:
         async with self.session() as session:
             return await session.scalar(
