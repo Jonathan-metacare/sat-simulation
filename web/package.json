@@ -9,7 +9,7 @@
   "scripts": {
     "copy:cesium": "node scripts/copy-cesium.mjs",
     "dev": "pnpm copy:cesium && next dev",
-    "build": "pnpm copy:cesium && next build",
+    "build": "pnpm copy:cesium && next build && node desktop/scripts/materialize-standalone.mjs",
     "start": "next start",
     "desktop:dev": "electron desktop/main.mjs",
     "desktop:python": "node desktop/scripts/build-python.mjs",
