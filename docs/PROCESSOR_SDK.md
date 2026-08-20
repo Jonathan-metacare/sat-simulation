@@ -1,10 +1,11 @@
 # Python processor SDK v1
 
 A customer processor is a ZIP containing `processor.yaml` and a Python 3.12 entrypoint.
-The Optical/GPU processor workspace can create this ZIP directly from its read-only
-built-in reference template: copy it into a custom version and implement only the
-functions marked `# to be implemented`. The application owns `main()` and the manifest
-contract. Third-party wheels are not accepted in desktop custom versions. ZIP paths must be relative; symlinks, duplicate
+The Optical/GPU processor workspace exposes the same executable SDK source used by the
+read-only built-in defaults. Creating a custom version clones that working default, so it
+can run unchanged or be modified by replacing helper functions. The application owns
+`main()` and the manifest contract. Third-party wheels are not accepted in desktop custom
+versions. ZIP paths must be relative; symlinks, duplicate
 members, traversal, unknown manifest fields and bundles over the configured limits
 are rejected before the bundle reaches Optical or GPU.
 

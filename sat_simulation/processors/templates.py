@@ -28,26 +28,65 @@ class ProcessorTemplate:
 
 _L0_SOURCE = '''"""L0 processor template for SpaceZenith-Sim.
 
-`main()` is owned by the SDK contract. Implement the functions marked
-`# to be implemented`; the host validates the resulting uint16 NumPy product.
+`main()` is owned by the SDK contract. The helper functions below are the
+working built-in default. A custom version may replace them while preserving
+the input/output contract; the host validates the resulting uint16 NumPy product.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import struct
 from pathlib import Path
 
 import numpy as np
 
+_PACKET = struct.Struct("!4sHHII")
+_CRC32C_POLY = 0x82F63B78
+
+
+def _crc32c(data: bytes) -> int:
+    value = 0xFFFFFFFF
+    for byte in data:
+        value ^= byte
+        for _ in range(8):
+            value = (value >> 1) ^ (_CRC32C_POLY if value & 1 else 0)
+    return value ^ 0xFFFFFFFF
+
+
+def _decode_raw(raw_path: Path, request: dict) -> np.ndarray:
+    bands, height, width = map(int, request["raw_layout"]["shape"])
+    output = np.zeros((bands, height, width), dtype=np.uint16)
+    seen: set[tuple[int, int]] = set()
+    with raw_path.open("rb") as stream:
+        while header := stream.read(_PACKET.size):
+            if len(header) != _PACKET.size:
+                raise ValueError("truncated RAW packet header")
+            magic, band, row, length, checksum = _PACKET.unpack(header)
+            payload = stream.read(length)
+            if magic != b"OPTR":
+                raise ValueError("invalid optical RAW packet sync")
+            if not (0 <= band < bands and 0 <= row < height):
+                raise ValueError("RAW packet coordinate is out of range")
+            if len(payload) != length or _crc32c(payload) != checksum:
+                raise ValueError(f"invalid RAW packet band={band} row={row}")
+            if length != width * 2:
+                raise ValueError("unexpected RAW row payload length")
+            key = (band, row)
+            if key not in seen:
+                output[band, row] = np.frombuffer(payload, dtype=">u2").astype(np.uint16)
+                seen.add(key)
+    if len(seen) != bands * height:
+        raise ValueError(f"incomplete RAW reconstruction: {len(seen)}/{bands * height}")
+    return output
+
 
 def validate_packet(raw_path: Path, request: dict) -> None:
-    # to be implemented
-    raise NotImplementedError("Implement RAW packet validation")
+    _decode_raw(raw_path, request)
 
 
 def reconstruct_l0(raw_path: Path, request: dict) -> np.ndarray:
-    # to be implemented
-    raise NotImplementedError("Implement RAW to L0 reconstruction")
+    return _decode_raw(raw_path, request)
 
 
 def main() -> None:
@@ -74,8 +113,9 @@ if __name__ == "__main__":
 
 _L1_SOURCE = '''"""L1 processor template for SpaceZenith-Sim.
 
-`main()` is owned by the SDK contract. Implement the functions marked
-`# to be implemented`; the host validates L1A/L1B GeoTIFF outputs.
+`main()` is owned by the SDK contract. The helper functions below are the
+working built-in default. A custom version may replace them while preserving
+the input/output contract; the host validates L1A/L1B GeoTIFF outputs.
 """
 from __future__ import annotations
 
@@ -84,21 +124,50 @@ import json
 from pathlib import Path
 
 import numpy as np
+import rasterio
+from rasterio.transform import Affine
 
 
 def generate_l1a(l0: np.ndarray, request: dict) -> np.ndarray:
-    # to be implemented
-    raise NotImplementedError("Implement L1A generation")
+    if l0.dtype != np.uint16:
+        raise ValueError("L0 input must be uint16")
+    return l0.copy()
 
 
 def generate_l1b(l1a: np.ndarray, request: dict) -> np.ndarray:
-    # to be implemented
-    raise NotImplementedError("Implement L1B generation")
+    sensor = request["sensor"]
+    max_dn = (1 << int(sensor["bit_depth"])) - 1
+    denominator = max_dn * float(sensor["gain"])
+    corrected = (
+        l1a.astype(np.float32)
+        - float(sensor["offset_dn"])
+        - float(sensor["dark_current_dn"])
+    ) / denominator
+    return np.clip(corrected, 0.0, 1.0).astype(np.float32)
 
 
 def write_geotiff(path: Path, data: np.ndarray, request: dict, level: str) -> None:
-    # to be implemented
-    raise NotImplementedError("Implement GeoTIFF writing")
+    raster = request["raster"]
+    transform = Affine(*list(raster["transform"])[:6])
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=int(raster["width"]),
+        height=int(raster["height"]),
+        count=int(raster["bands"]),
+        dtype="uint16" if level == "L1A" else "float32",
+        crs=raster["crs"],
+        transform=transform,
+        tiled=True,
+        compress="deflate",
+    ) as destination:
+        destination.write(data)
+        destination.update_tags(
+            processing_level=level,
+            captured_at=request["captured_at"],
+            processor="spacezenith-built-in-sdk",
+        )
 
 
 def main() -> None:

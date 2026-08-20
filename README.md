@@ -136,4 +136,5 @@ Provider 阻塞真实性、步骤幂等性和持久化重试状态。
 - 不包含完整传感器物理、GTX 电气特性、RF 物理层、安全加固或 CCSDS 认证。
 
 详见 [架构](docs/ARCHITECTURE.md)、[协议 ICD](docs/PROTOCOL.md)、
-[光学产品](docs/PRODUCTS.md)、[处理器 SDK](docs/PROCESSOR_SDK.md) 和 [运行手册](docs/OPERATIONS.md)。
+[光学产品](docs/PRODUCTS.md)、[处理器 SDK](docs/PROCESSOR_SDK.md)、[数据维护](docs/DATA_MAINTENANCE.md)
+和 [运行手册](docs/OPERATIONS.md)。

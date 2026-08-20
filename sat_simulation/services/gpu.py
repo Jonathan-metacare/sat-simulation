@@ -54,6 +54,7 @@ from sat_simulation.payload.providers import (
     YOLOHTTPProvider,
 )
 from sat_simulation.processors import ProcessorBlocked, ProcessorRunner, inspect_processor_bundle
+from sat_simulation.processors.templates import builtin_template, workspace_bundle
 
 
 class ProviderBlocked(RuntimeError):
@@ -100,6 +101,10 @@ class GPUState:
     async def start(self) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.processor_dir.mkdir(parents=True, exist_ok=True)
+        builtin = builtin_template(ProcessorStage.L1)
+        (self.processor_dir / "builtin-l1.zip").write_bytes(
+            workspace_bundle(builtin.definition, builtin.source)
+        )
         await self.receiver.start(self.settings.host, self.settings.gpu_gtx_port)
         for state_path in self.jobs_dir.glob("*/job.json"):
             try:
@@ -324,7 +329,7 @@ class GPUState:
                 SensorConfig(seed=int(context.get("sensor_seed") or 20260811), **sensor)
             )
             processor_id = str(context.get("l1_processor_id") or "builtin-l1")
-            if processor_id == "builtin-l1":
+            if processor_id == "builtin-l1" and self.settings.oci_runtime != "desktop-sandbox":
                 products = await asyncio.to_thread(
                     pipeline.process_l1_from_l0,
                     l0_path=l0_path,

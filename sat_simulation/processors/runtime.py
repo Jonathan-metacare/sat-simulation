@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
+import rasterio
 import yaml
 from pydantic import ValidationError
 
@@ -58,7 +59,8 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
         normalized = path.as_posix()
         if normalized.lower().endswith(".whl"):
             raise ProcessorBundleError(
-                "desktop processor bundles cannot include wheels; use only application-provided dependencies"
+                "desktop processor bundles cannot include wheels; "
+                "use only application-provided dependencies"
             )
         if normalized in seen:
             raise ProcessorBundleError(f"duplicate bundle path: {normalized}")
@@ -345,7 +347,17 @@ class ProcessorRunner:
     def _seatbelt_literal(path: Path) -> str:
         return str(path.resolve()).replace("\\", "\\\\").replace('"', '\\"')
 
-    def _desktop_profile(self, input_dir: Path, output_dir: Path) -> str:
+    @staticmethod
+    def _geospatial_data_paths() -> tuple[Path, Path]:
+        """Return Rasterio's packaged PROJ/GDAL data, never caller-supplied paths."""
+        root = Path(rasterio.__file__).resolve().parent
+        proj_data = root / "proj_data"
+        gdal_data = root / "gdal_data"
+        if not (proj_data / "proj.db").is_file() or not gdal_data.is_dir():
+            raise ProcessorBlocked("桌面安全执行器缺少 Rasterio PROJ/GDAL 运行数据")
+        return proj_data, gdal_data
+
+    def _desktop_profile(self, input_dir: Path, output_dir: Path, runtime_dir: Path) -> str:
         """A deny-by-default profile for one disposable processor execution."""
         app_root = Path(__file__).resolve().parents[2]
         executable = Path(sys.executable).resolve()
@@ -367,6 +379,14 @@ class ProcessorRunner:
             f'  (allow file-read* (subpath "{self._seatbelt_literal(Path(value))}"))'
             for value in allow_read
         )
+        # SQLite resolves the PROJ database and its parent directories before
+        # opening the database. Restore metadata-only traversal for the exact
+        # execution path, without revealing directory contents elsewhere in
+        # /private/var (or user data under $HOME).
+        metadata_rules = "\n".join(
+            f'  (allow file-read-metadata (literal "{self._seatbelt_literal(path)}"))'
+            for path in (runtime_dir.resolve(), *runtime_dir.resolve().parents)
+        )
         return "\n".join(
             [
                 "(version 1)",
@@ -375,10 +395,9 @@ class ProcessorRunner:
                 # NumPy reads OS/kernel identity during import; this exposes
                 # no user data and is distinct from network access.
                 "(allow sysctl-read)",
-                # Permit macOS runtime reads, then immediately deny all user
-                # and disposable data roots. More-specific allow rules below
-                # re-open only the frozen interpreter, app resource root and
-                # this execution's input directory.
+                # macOS runtime libraries are spread across the system tree.
+                # Re-deny user and disposable roots; only explicit rules below
+                # re-open the frozen interpreter and this execution's input.
                 '(allow file-read* (subpath "/"))',
                 f'  (deny file-read* (subpath "{self._seatbelt_literal(Path.home())}"))',
                 '  (deny file-read* (subpath "/private/var"))',
@@ -392,6 +411,13 @@ class ProcessorRunner:
                 # the file and network policy remains deny-by-default.
                 "(allow process-exec)",
                 read_rules,
+                metadata_rules,
+                # PROJ opens its SQLite database with locking and may create
+                # transient journals. This is a per-execution copy of public
+                # package data, never the installed environment or user data.
+                f'  (allow file-read* (subpath "{self._seatbelt_literal(runtime_dir)}"))',
+                f'  (allow file-write* (subpath "{self._seatbelt_literal(runtime_dir)}"))',
+                f'  (allow file-ioctl (subpath "{self._seatbelt_literal(runtime_dir)}"))',
                 f'  (allow file-write* (subpath "{self._seatbelt_literal(output_dir)}"))',
                 # Python uses these device files for ordinary interpreter IO;
                 # no user directory, socket or network permission is granted.
@@ -435,8 +461,21 @@ class ProcessorRunner:
             encoding="utf-8",
         )
         request_path.chmod(0o444)
+        # PROJ opens its SQLite CRS database lazily, with locking/journal
+        # operations on some GDAL builds. The Python environment is often
+        # beneath $HOME in development, which Seatbelt must deny to customer
+        # code. Stage only public Rasterio data in a disposable, writable
+        # per-execution runtime directory instead of weakening that boundary.
+        package_proj_data, package_gdal_data = self._geospatial_data_paths()
+        geospatial_dir = execution_dir / "geospatial-runtime"
+        staged_proj_data = geospatial_dir / "proj_data"
+        staged_gdal_data = geospatial_dir / "gdal_data"
+        shutil.copytree(package_proj_data, staged_proj_data)
+        shutil.copytree(package_gdal_data, staged_gdal_data)
         profile_path = execution_dir / "seatbelt.sb"
-        profile_path.write_text(self._desktop_profile(input_dir, output_dir), encoding="utf-8")
+        profile_path.write_text(
+            self._desktop_profile(input_dir, output_dir, geospatial_dir), encoding="utf-8"
+        )
         profile_path.chmod(0o400)
         if getattr(sys, "frozen", False):
             worker = [sys.executable, "processor-worker"]
@@ -460,7 +499,19 @@ class ProcessorRunner:
             # Python's importer may create a small temporary file before the
             # Worker clears its environment. Keep it inside the only writable
             # per-execution output directory.
-            env={"PATH": "/usr/bin:/bin", "TMPDIR": str(output_dir)},
+            env={
+                "PATH": "/usr/bin:/bin",
+                "TMPDIR": str(output_dir),
+                # PROJ 9 prefers PROJ_DATA; PROJ_LIB preserves compatibility
+                # with the GDAL/Rasterio combinations packaged by older builds.
+                "PROJ_DATA": str(staged_proj_data),
+                "PROJ_LIB": str(staged_proj_data),
+                "GDAL_DATA": str(staged_gdal_data),
+                # SQLite/PROJ may use a temporary journal or cache. Keep all
+                # of it in this execution's output directory, never /var/tmp.
+                "CPL_TMPDIR": str(output_dir),
+                "SQLITE_TMPDIR": str(output_dir),
+            },
         )
         quota_exceeded = asyncio.Event()
         memory_exceeded = asyncio.Event()
@@ -519,8 +570,14 @@ class ProcessorRunner:
             raise ProcessorBlocked("处理器输出超过配置上限")
         if memory_exceeded.is_set():
             raise ProcessorBlocked("处理器超过配置内存上限")
-        stdout = SECRET_PATTERN.sub(r"\1\2[REDACTED]", stdout_bytes[-MAX_LOG_BYTES:].decode("utf-8", errors="replace"))
-        stderr = SECRET_PATTERN.sub(r"\1\2[REDACTED]", stderr_bytes[-MAX_LOG_BYTES:].decode("utf-8", errors="replace"))
+        stdout = SECRET_PATTERN.sub(
+            r"\1\2[REDACTED]",
+            stdout_bytes[-MAX_LOG_BYTES:].decode("utf-8", errors="replace"),
+        )
+        stderr = SECRET_PATTERN.sub(
+            r"\1\2[REDACTED]",
+            stderr_bytes[-MAX_LOG_BYTES:].decode("utf-8", errors="replace"),
+        )
         if process.returncode != 0:
             raise ProcessorBlocked(f"桌面安全执行器退出码 {process.returncode}: {stderr[-1000:]}")
         total = sum(path.stat().st_size for path in output_dir.rglob("*") if path.is_file())

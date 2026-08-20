@@ -41,8 +41,29 @@ def main() -> None:
     # execution path with a best-effort host fallback.
     if hasattr(resource, "RLIMIT_NPROC"):
         restrict(resource.RLIMIT_NPROC, args.pids)
+    # The parent derives these paths from packaged resources and this
+    # execution's disposable directories. Preserve no other inherited
+    # environment state for customer code.
+    runtime_environment = {
+        key: os.environ[key]
+        for key in (
+            "PROJ_DATA",
+            "PROJ_LIB",
+            "GDAL_DATA",
+            "TMPDIR",
+            "CPL_TMPDIR",
+            "SQLITE_TMPDIR",
+        )
+        if key in os.environ
+    }
     os.environ.clear()
-    os.environ.update({"PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"})
+    os.environ.update(
+        {
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            **runtime_environment,
+        }
+    )
     entrypoint = Path(args.entrypoint).resolve()
     if not entrypoint.is_file():
         raise FileNotFoundError("processor entrypoint is missing")

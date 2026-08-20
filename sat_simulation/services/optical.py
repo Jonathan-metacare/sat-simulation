@@ -43,6 +43,7 @@ from sat_simulation.optical.pipeline import (
 )
 from sat_simulation.optical.scenes import validate_and_convert_scene
 from sat_simulation.processors import ProcessorBlocked, ProcessorRunner, inspect_processor_bundle
+from sat_simulation.processors.templates import builtin_template, workspace_bundle
 
 
 class OpticalState:
@@ -62,6 +63,10 @@ class OpticalState:
         self.scene_dir.mkdir(parents=True, exist_ok=True)
         self.product_dir.mkdir(parents=True, exist_ok=True)
         self.processor_dir.mkdir(parents=True, exist_ok=True)
+        builtin = builtin_template(ProcessorStage.L0)
+        (self.processor_dir / "builtin-l0.zip").write_bytes(
+            workspace_bundle(builtin.definition, builtin.source)
+        )
         demo_path, _metadata = ensure_demo_scene(self.scene_dir)
         alias = self.scene_dir / "demo-optical-scene.tif"
         if demo_path != alias and not alias.exists():
@@ -191,7 +196,10 @@ class OpticalState:
             raise ValueError("optical payload has no RAW for mission")
         raw_manifest = ProductManifest.model_validate(job["products"][ProductLevel.RAW])
         raw_path = Path(str(raw_manifest.artifact_path))
-        if command.l0_processor_id == "builtin-l0":
+        if (
+            command.l0_processor_id == "builtin-l0"
+            and self.settings.oci_runtime != "desktop-sandbox"
+        ):
             manifest, l0_path = await asyncio.to_thread(
                 pipeline.process_l0_from_raw,
                 raw_path=raw_path,

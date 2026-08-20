@@ -2,14 +2,26 @@ from __future__ import annotations
 
 import io
 import stat
+import struct
 import zipfile
 from pathlib import Path
 
+import numpy as np
 import pytest
+import rasterio
 
 from sat_simulation.common.models import ProcessorStage
-from sat_simulation.processors import ProcessorBundleError, ProcessorRunner, inspect_processor_bundle
-from sat_simulation.processors.templates import builtin_template, source_from_bundle, workspace_bundle
+from sat_simulation.common.protocol import crc32c
+from sat_simulation.processors import (
+    ProcessorBundleError,
+    ProcessorRunner,
+    inspect_processor_bundle,
+)
+from sat_simulation.processors.templates import (
+    builtin_template,
+    source_from_bundle,
+    workspace_bundle,
+)
 
 
 def bundle(manifest: str, files: dict[str, bytes] | None = None) -> bytes:
@@ -64,11 +76,11 @@ def test_processor_bundle_rejects_traversal_and_symlink() -> None:
 
 
 @pytest.mark.parametrize("stage", [ProcessorStage.L0, ProcessorStage.L1])
-def test_builtin_workspace_templates_are_readonly_reference_bundles(stage: ProcessorStage) -> None:
+def test_builtin_workspace_templates_are_executable_default_bundles(stage: ProcessorStage) -> None:
     template = builtin_template(stage)
     assert "def main()" in template.source
-    assert "# to be implemented" in template.source
-    assert "NotImplementedError" in template.source
+    assert "NotImplementedError" not in template.source
+    assert "spacezenith-built-in-sdk" in template.source or "_decode_raw" in template.source
     content = workspace_bundle(template.definition, template.source)
     definition, _digest = inspect_processor_bundle(content)
     assert definition.stage == stage
@@ -94,21 +106,62 @@ async def test_macos_desktop_runner_executes_only_inside_seatbelt(tmp_path: Path
         update={"id": "seatbelt-smoke", "timeout_seconds": 10, "memory_mb": 2048}
     )
     source = builtin_template(ProcessorStage.L0).source
-    source = source.replace(
-        '    # to be implemented\n    raise NotImplementedError("Implement RAW packet validation")',
-        "    return None",
-    ).replace(
-        '    # to be implemented\n    raise NotImplementedError("Implement RAW to L0 reconstruction")',
-        "    return np.zeros((1, 1, 1), dtype=np.uint16)",
-    )
     bundle_path = tmp_path / "processor.zip"
     bundle_path.write_bytes(workspace_bundle(definition, source))
     raw_path = tmp_path / "raw.bin"
-    raw_path.write_bytes(b"raw")
+    payload = np.array([42], dtype=">u2").tobytes()
+    raw_path.write_bytes(
+        struct.Struct("!4sHHII").pack(b"OPTR", 0, 0, len(payload), crc32c(payload)) + payload
+    )
     result = await runner.run(
         bundle_path=bundle_path,
-        request={"schema_version": 1},
+        request={"schema_version": 1, "raw_layout": {"shape": [1, 1, 1]}},
         input_files={"raw": raw_path},
         execution_dir=tmp_path / "execution",
     )
     assert (result.output_dir / "l0.npy").is_file()
+
+
+@pytest.mark.asyncio
+async def test_macos_desktop_runner_writes_l1_geotiff_with_proj_data(tmp_path: Path) -> None:
+    runner = ProcessorRunner(runtime="desktop-sandbox")
+    if not await runner.available():
+        pytest.skip("macOS Seatbelt is unavailable on this platform")
+    definition = builtin_template(ProcessorStage.L1).definition.model_copy(
+        update={"id": "seatbelt-l1-geotiff", "timeout_seconds": 10, "memory_mb": 2048}
+    )
+    bundle_path = tmp_path / "processor.zip"
+    bundle_path.write_bytes(
+        workspace_bundle(definition, builtin_template(ProcessorStage.L1).source)
+    )
+    l0_path = tmp_path / "l0.npy"
+    np.save(l0_path, np.full((1, 256, 256), 512, dtype=np.uint16), allow_pickle=False)
+
+    result = await runner.run(
+        bundle_path=bundle_path,
+        request={
+            "schema_version": 1,
+            "captured_at": "2026-08-20T00:00:00+00:00",
+            "sensor": {
+                "bit_depth": 12,
+                "gain": 1.0,
+                "offset_dn": 32.0,
+                "dark_current_dn": 4.0,
+            },
+            "raster": {
+                "width": 256,
+                "height": 256,
+                "bands": 1,
+                "crs": "EPSG:4326",
+                "transform": [0.0001, 0.0, 116.4, 0.0, -0.0001, 39.9],
+            },
+        },
+        input_files={"l0": l0_path},
+        execution_dir=tmp_path / "l1-execution",
+    )
+    with rasterio.open(result.output_dir / "l1a.tif") as l1a:
+        assert l1a.crs.to_string() == "EPSG:4326"
+        assert l1a.dtypes == ("uint16",)
+    with rasterio.open(result.output_dir / "l1b.tif") as l1b:
+        assert l1b.crs.to_string() == "EPSG:4326"
+        assert l1b.dtypes == ("float32",)
