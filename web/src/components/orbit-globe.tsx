@@ -26,16 +26,40 @@ function loadCesium(): Promise<typeof Cesium> {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>('script[data-sat-sim-cesium="true"]');
     if (existing) {
-      existing.addEventListener("load", () => window.Cesium ? resolve(window.Cesium) : reject(new Error("Cesium global was not initialized")), { once: true });
-      existing.addEventListener("error", () => reject(new Error("Cesium script failed to load")), { once: true });
+      // A failed tag is left in the document by the browser.  During React
+      // Strict Mode or Fast Refresh, waiting for a new event on that tag would
+      // leave every later attempt pending forever.
+      if (existing.dataset.loadState === "error") {
+        existing.remove();
+        return void loadCesium().then(resolve, reject);
+      }
+      if (existing.dataset.loadState === "loaded") {
+        return window.Cesium
+          ? resolve(window.Cesium)
+          : reject(new Error("Cesium script loaded without initializing its global"));
+      }
+      existing.addEventListener("load", () => {
+        existing.dataset.loadState = "loaded";
+        window.Cesium ? resolve(window.Cesium) : reject(new Error("Cesium global was not initialized"));
+      }, { once: true });
+      existing.addEventListener("error", () => {
+        existing.dataset.loadState = "error";
+        reject(new Error("Cesium script failed to load: /cesium/Cesium.js. Run pnpm copy:cesium from the web directory."));
+      }, { once: true });
       return;
     }
     const script = document.createElement("script");
     script.src = "/cesium/Cesium.js";
     script.async = true;
     script.dataset.satSimCesium = "true";
-    script.onload = () => window.Cesium ? resolve(window.Cesium) : reject(new Error("Cesium global was not initialized"));
-    script.onerror = () => reject(new Error("Cesium script failed to load"));
+    script.onload = () => {
+      script.dataset.loadState = "loaded";
+      window.Cesium ? resolve(window.Cesium) : reject(new Error("Cesium global was not initialized"));
+    };
+    script.onerror = () => {
+      script.dataset.loadState = "error";
+      reject(new Error("Cesium script failed to load: /cesium/Cesium.js. Run pnpm copy:cesium from the web directory."));
+    };
     document.head.appendChild(script);
   });
 }

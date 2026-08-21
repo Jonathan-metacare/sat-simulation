@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import site
 import stat
 import sys
 import zipfile
@@ -477,11 +478,17 @@ class ProcessorRunner:
             self._desktop_profile(input_dir, output_dir, geospatial_dir), encoding="utf-8"
         )
         profile_path.chmod(0o400)
+        # uv creates `.venv/bin/python` as a symlink into its managed runtime
+        # under the user's home directory.  Seatbelt applies its execution
+        # decision to the path passed to execvp, so use the resolved binary
+        # that is explicitly allowed by `_desktop_profile` rather than the
+        # virtualenv link.  This is still the exact same interpreter.
+        worker_executable = str(Path(sys.executable).resolve())
         if getattr(sys, "frozen", False):
-            worker = [sys.executable, "processor-worker"]
+            worker = [worker_executable, "processor-worker"]
         else:
             worker = [
-                sys.executable,
+                worker_executable,
                 str(Path(__file__).resolve().parents[2] / "desktop" / "python_service.py"),
                 "processor-worker",
             ]
@@ -492,6 +499,27 @@ class ProcessorRunner:
             "--cpu-seconds", str(max(1, definition.timeout_seconds)),
             "--memory-mb", str(definition.memory_mb),
         ]
+        worker_environment = {
+            "PATH": "/usr/bin:/bin",
+            "TMPDIR": str(output_dir),
+            # PROJ 9 prefers PROJ_DATA; PROJ_LIB preserves compatibility
+            # with the GDAL/Rasterio combinations packaged by older builds.
+            "PROJ_DATA": str(staged_proj_data),
+            "PROJ_LIB": str(staged_proj_data),
+            "GDAL_DATA": str(staged_gdal_data),
+            # SQLite/PROJ may use a temporary journal or cache. Keep all
+            # of it in this execution's output directory, never /var/tmp.
+            "CPL_TMPDIR": str(output_dir),
+            "SQLITE_TMPDIR": str(output_dir),
+        }
+        if not getattr(sys, "frozen", False):
+            # Resolving the uv interpreter bypasses pyvenv.cfg, so recreate
+            # the two import roots it normally supplies. Both are covered by
+            # the exact read rules in `_desktop_profile`.
+            project_root = Path(__file__).resolve().parents[2]
+            worker_environment["PYTHONPATH"] = os.pathsep.join(
+                [str(project_root), *site.getsitepackages()]
+            )
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.PIPE,
@@ -499,19 +527,7 @@ class ProcessorRunner:
             # Python's importer may create a small temporary file before the
             # Worker clears its environment. Keep it inside the only writable
             # per-execution output directory.
-            env={
-                "PATH": "/usr/bin:/bin",
-                "TMPDIR": str(output_dir),
-                # PROJ 9 prefers PROJ_DATA; PROJ_LIB preserves compatibility
-                # with the GDAL/Rasterio combinations packaged by older builds.
-                "PROJ_DATA": str(staged_proj_data),
-                "PROJ_LIB": str(staged_proj_data),
-                "GDAL_DATA": str(staged_gdal_data),
-                # SQLite/PROJ may use a temporary journal or cache. Keep all
-                # of it in this execution's output directory, never /var/tmp.
-                "CPL_TMPDIR": str(output_dir),
-                "SQLITE_TMPDIR": str(output_dir),
-            },
+            env=worker_environment,
         )
         quota_exceeded = asyncio.Event()
         memory_exceeded = asyncio.Event()
