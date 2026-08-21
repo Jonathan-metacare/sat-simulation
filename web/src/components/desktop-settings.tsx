@@ -15,6 +15,8 @@ const emptySettings: DesktopSettings = {
   activeScenarioId: "scenario-demo-beijing",
   llmApiUrl: "http://127.0.0.1:11434", llmModel: "", llmApiKey: "",
   yoloApiUrl: "", yoloModel: "default", yoloApiKey: "", providerTimeoutSeconds: 30,
+  gpuMode: "local", jetsonHost: "", jetsonApiPort: 8002, jetsonGtxPort: 9101,
+  desktopAdvertiseHost: "", platformGtxResultPort: 9102,
 };
 
 function Field({ label, value, onChange, type = "text", placeholder }: {
@@ -51,6 +53,7 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
   const [yamlFile, setYamlFile] = useState<File>();
   const [sceneNotice, setSceneNotice] = useState<string>();
   const [scenarios, setScenarios] = useState<ScenarioRecord[]>([]);
+  const [visionModels, setVisionModels] = useState<Array<{ name: string; capabilities: string[] }>>([]);
 
   useEffect(() => {
     if (!open || !bridge) return;
@@ -59,6 +62,10 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
     }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, [activeScenarioId, bridge, open]);
   useEffect(() => { if (open) setSection(initialSection); }, [initialSection, open]);
+  useEffect(() => {
+    if (!open || section !== "ai" || value.gpuMode !== "jetson") return;
+    void api.providerModels().then((result) => setVisionModels(result.models)).catch(() => setVisionModels([]));
+  }, [open, section, value.gpuMode]);
   useEffect(() => {
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -100,13 +107,14 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
         <label className="text-xs text-slate-400">{t("settings.theme")}<select value={value.theme} onChange={(event) => update("theme", event.target.value as "dark" | "light")} className="mt-1.5 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-100"><option value="dark">{t("theme.dark")}</option><option value="light">{t("theme.light")}</option></select></label>
       </div>}
       {section === "plugins" && <div className="space-y-3"><Field label="Cesium Ion Token" type="password" value={value.cesiumIonToken} onChange={(next) => update("cesiumIonToken", next)} /></div>}
-      {section === "ai" && <div className="mb-4 grid grid-cols-2 gap-3"><button onClick={() => update("activeAiMode", "yolo")} className={`rounded-xl border p-3 text-left text-sm ${value.activeAiMode === "yolo" ? "border-cyan-300/50 bg-cyan-300/10 text-cyan-100" : "border-white/10 text-slate-400"}`}>YOLO<div className="mt-1 text-[10px] opacity-70">{t("settings.yoloHint")}</div></button><button onClick={() => update("activeAiMode", "llm")} className={`rounded-xl border p-3 text-left text-sm ${value.activeAiMode === "llm" ? "border-cyan-300/50 bg-cyan-300/10 text-cyan-100" : "border-white/10 text-slate-400"}`}>LLM<div className="mt-1 text-[10px] opacity-70">{t("settings.llmHint")}</div></button></div>}
-      {section === "ai" && value.activeAiMode === "llm" && <div className="grid gap-4 sm:grid-cols-2">
+      {section === "ai" && <><div className="mb-4 grid grid-cols-2 gap-3"><button onClick={() => update("gpuMode", "local")} className={`rounded-xl border p-3 text-left text-sm ${value.gpuMode === "local" ? "border-cyan-300/50 bg-cyan-300/10 text-cyan-100" : "border-white/10 text-slate-400"}`}>Local GPU<div className="mt-1 text-[10px] opacity-70">Run GPU payload on this Mac</div></button><button onClick={() => update("gpuMode", "jetson")} className={`rounded-xl border p-3 text-left text-sm ${value.gpuMode === "jetson" ? "border-cyan-300/50 bg-cyan-300/10 text-cyan-100" : "border-white/10 text-slate-400"}`}>Jetson GPU<div className="mt-1 text-[10px] opacity-70">Remote GPU payload; no local fallback</div></button></div>{value.gpuMode === "jetson" && <div className="mb-4 grid gap-4 rounded-xl border border-cyan-300/20 bg-cyan-300/[.04] p-3 sm:grid-cols-2"><Field label="Jetson host" value={value.jetsonHost} onChange={(next) => update("jetsonHost", next)} placeholder="192.168.1.20" /><Field label="Jetson API port" type="number" value={value.jetsonApiPort} onChange={(next) => update("jetsonApiPort", Number(next) || 8002)} /><Field label="Jetson GTX port" type="number" value={value.jetsonGtxPort} onChange={(next) => update("jetsonGtxPort", Number(next) || 9101)} /><Field label="This Mac LAN address" value={value.desktopAdvertiseHost} onChange={(next) => update("desktopAdvertiseHost", next)} placeholder="192.168.1.10" /><Field label="Platform result port" type="number" value={value.platformGtxResultPort} onChange={(next) => update("platformGtxResultPort", Number(next) || 9102)} /><p className="text-xs leading-5 text-slate-400">Jetson offline blocks L1/AI. Ground, Web and Optical stay local.</p></div>}<div className="mb-4 grid grid-cols-2 gap-3"><button onClick={() => update("activeAiMode", "yolo")} className={`rounded-xl border p-3 text-left text-sm ${value.activeAiMode === "yolo" ? "border-cyan-300/50 bg-cyan-300/10 text-cyan-100" : "border-white/10 text-slate-400"}`}>YOLO</button><button onClick={() => update("activeAiMode", "llm")} className={`rounded-xl border p-3 text-left text-sm ${value.activeAiMode === "llm" ? "border-cyan-300/50 bg-cyan-300/10 text-cyan-100" : "border-white/10 text-slate-400"}`}>LLM</button></div></>}
+      {section === "ai" && value.activeAiMode === "llm" && value.gpuMode === "local" && <div className="grid gap-4 sm:grid-cols-2">
         <Field label="LLM API URL" value={value.llmApiUrl} onChange={(next) => update("llmApiUrl", next)} placeholder="http://127.0.0.1:11434" />
         <Field label={t("settings.llmModel")} value={value.llmModel} onChange={(next) => update("llmModel", next)} placeholder="qwen3.5:4b" />
         <Field label="LLM API Key" type="password" value={value.llmApiKey} onChange={(next) => update("llmApiKey", next)} />
         <Field label={t("settings.timeout")} type="number" value={value.providerTimeoutSeconds} onChange={(next) => update("providerTimeoutSeconds", Number(next) || 30)} />
       </div>}
+      {section === "ai" && value.activeAiMode === "llm" && value.gpuMode === "jetson" && <div className="grid gap-4 sm:grid-cols-2"><label className="block text-xs text-slate-400">Jetson vision model<select value={value.llmModel} onChange={(event) => update("llmModel", event.target.value)} className="mt-1.5 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-100"><option value="">Select a vision model</option>{visionModels.map((model) => <option key={model.name} value={model.name}>{model.name}</option>)}</select></label><Field label={t("settings.timeout")} type="number" value={value.providerTimeoutSeconds} onChange={(next) => update("providerTimeoutSeconds", Number(next) || 30)} /></div>}
       {section === "ai" && value.activeAiMode === "yolo" && <div className="grid gap-4 sm:grid-cols-2">
         <Field label="YOLO API URL" value={value.yoloApiUrl} onChange={(next) => update("yoloApiUrl", next)} placeholder="http://127.0.0.1:9000" />
         <Field label="YOLO Model" value={value.yoloModel} onChange={(next) => update("yoloModel", next)} />

@@ -861,6 +861,18 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         except Exception as exc:
             return {"status": "unavailable", "reason": str(exc)}
 
+    @app.get("/api/providers/models")
+    async def provider_models(provider: str) -> dict[str, Any]:
+        if provider != "ollama":
+            raise HTTPException(404, "Only ollama model discovery is supported")
+        try:
+            async with httpx.AsyncClient(timeout=12) as client:
+                response = await client.get(f"{app_settings.gpu_http_url}/internal/providers/ollama/models")
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, f"GPU/Ollama unavailable: {exc}") from exc
+
     async def prepare_scene_asset(
         file: UploadFile,
         scene_id: str,
@@ -1356,6 +1368,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             processor_snapshots=processor_snapshots,
             enable_ai=True,
             ai_mode=request.ai_mode,
+            ai_model=request.ai_model,
             project_context=request.project_context,
             analysis_prompt=request.analysis_prompt,
             scenario_snapshot=scenario,
@@ -1374,6 +1387,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 data={
                     "planned_windows": plan.model_dump(mode="json"),
                     "ai_mode": request.ai_mode,
+                    "ai_model": request.ai_model,
                     "message_key": EVENT_MESSAGE_KEYS["mission_initialized"],
                 },
             )

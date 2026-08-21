@@ -65,6 +65,47 @@
         }
       }
     },
+    "/api/providers/models": {
+      "get": {
+        "summary": "Provider Models",
+        "operationId": "provider_models_api_providers_models_get",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Provider Models Api Providers Models Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/scenes/validate": {
       "post": {
         "summary": "Validate Scene",
@@ -2198,6 +2239,18 @@
             "$ref": "#/components/schemas/AIMode",
             "default": "yolo"
           },
+          "ai_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Model"
+          },
           "project_context": {
             "type": "string",
             "maxLength": 4000,
@@ -2281,6 +2334,18 @@
           "ai_mode": {
             "$ref": "#/components/schemas/AIMode",
             "default": "yolo"
+          },
+          "ai_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Model"
           },
           "project_context": {
             "type": "string",

@@ -25,6 +25,12 @@ const defaultSettings = {
   yoloModel: "default",
   yoloApiKey: "",
   providerTimeoutSeconds: 30,
+  gpuMode: "local",
+  jetsonHost: "",
+  jetsonApiPort: 8002,
+  jetsonGtxPort: 9101,
+  desktopAdvertiseHost: "",
+  platformGtxResultPort: 9102,
 };
 
 let mainWindow;
@@ -63,6 +69,10 @@ async function loadSettings() {
 function cleanSettings(value) {
   const text = (field) => typeof value?.[field] === "string" ? value[field].trim() : defaultSettings[field];
   const timeout = Number(value?.providerTimeoutSeconds);
+  const port = (field, fallback) => {
+    const candidate = Number(value?.[field]);
+    return Number.isInteger(candidate) && candidate >= 1 && candidate <= 65535 ? candidate : fallback;
+  };
   return {
     locale: value?.locale === "en" ? "en" : "zh",
     theme: value?.theme === "light" ? "light" : "dark",
@@ -72,6 +82,12 @@ function cleanSettings(value) {
     llmApiUrl: text("llmApiUrl"), llmModel: text("llmModel"), llmApiKey: text("llmApiKey"),
     yoloApiUrl: text("yoloApiUrl"), yoloModel: text("yoloModel") || "default", yoloApiKey: text("yoloApiKey"),
     providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600 ? timeout : 30,
+    gpuMode: value?.gpuMode === "jetson" ? "jetson" : "local",
+    jetsonHost: text("jetsonHost"),
+    jetsonApiPort: port("jetsonApiPort", 8002),
+    jetsonGtxPort: port("jetsonGtxPort", 9101),
+    desktopAdvertiseHost: text("desktopAdvertiseHost"),
+    platformGtxResultPort: port("platformGtxResultPort", 9102),
   };
 }
 
@@ -111,6 +127,8 @@ function appendLog(name, chunk) {
 function sharedEnvironment() {
   const { root, database } = runtimeDirectories();
   const ports = runtime.ports;
+  const remoteGpu = settings.gpuMode === "jetson";
+  const jetsonHttp = `http://${settings.jetsonHost}:${settings.jetsonApiPort}`;
   return {
     ...process.env,
     SAT_SIM_HOST: "127.0.0.1",
@@ -125,16 +143,18 @@ function sharedEnvironment() {
     SAT_SIM_GROUND_DOWNLINK_PORT: String(ports.downlink),
     SAT_SIM_PLATFORM_UPLINK_HOST: "127.0.0.1",
     SAT_SIM_PLATFORM_UPLINK_PORT: String(ports.uplink),
-    SAT_SIM_GPU_GTX_HOST: "127.0.0.1",
-    SAT_SIM_GPU_GTX_PORT: String(ports.gtx),
+    SAT_SIM_GPU_GTX_HOST: remoteGpu ? settings.jetsonHost : "127.0.0.1",
+    SAT_SIM_GPU_GTX_PORT: String(remoteGpu ? settings.jetsonGtxPort : ports.gtx),
     SAT_SIM_PLATFORM_GTX_RESULT_HOST: "127.0.0.1",
-    SAT_SIM_PLATFORM_GTX_RESULT_PORT: String(ports.gtxResult),
+    SAT_SIM_PLATFORM_GTX_RESULT_PORT: String(remoteGpu ? settings.platformGtxResultPort : ports.gtxResult),
+    SAT_SIM_PLATFORM_GTX_RESULT_BIND_HOST: remoteGpu ? "0.0.0.0" : "127.0.0.1",
+    SAT_SIM_PLATFORM_GTX_RESULT_ADVERTISE_HOST: remoteGpu ? settings.desktopAdvertiseHost : "127.0.0.1",
     SAT_SIM_OPTICAL_PAYLOAD_HOST: "127.0.0.1",
     SAT_SIM_OPTICAL_PAYLOAD_PORT: String(ports.payload),
     SAT_SIM_PLATFORM_PAYLOAD_RESULT_HOST: "127.0.0.1",
     SAT_SIM_PLATFORM_PAYLOAD_RESULT_PORT: String(ports.payloadResult),
     SAT_SIM_PLATFORM_HTTP_URL: `http://127.0.0.1:${ports.platform}`,
-    SAT_SIM_GPU_HTTP_URL: `http://127.0.0.1:${ports.gpu}`,
+    SAT_SIM_GPU_HTTP_URL: remoteGpu ? jetsonHttp : `http://127.0.0.1:${ports.gpu}`,
     SAT_SIM_GROUND_HTTP_URL: `http://127.0.0.1:${ports.ground}`,
     SAT_SIM_OPTICAL_HTTP_URL: `http://127.0.0.1:${ports.optical}`,
     // Desktop custom processors use the application-managed macOS sandbox.
@@ -329,12 +349,12 @@ async function startStack() {
   // All simulation nodes are independent at boot.  Start their frozen Python
   // runtimes together: the first import of Rasterio/GDAL can take tens of
   // seconds on macOS, but it must not serialize the whole desktop startup.
-  startService("gpu", runtime.ports.gpu);
+  if (settings.gpuMode === "local") startService("gpu", runtime.ports.gpu);
   startService("optical", runtime.ports.optical);
   startService("platform", runtime.ports.platform);
   startService("ground", runtime.ports.ground);
   await Promise.all([
-    waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务"),
+    ...(settings.gpuMode === "local" ? [waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务")] : []),
     waitFor(`http://127.0.0.1:${runtime.ports.platform}/health`, "星务平台服务"),
     waitFor(`http://127.0.0.1:${runtime.ports.optical}/health`, "光学载荷服务"),
     waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务"),
@@ -351,7 +371,7 @@ function diagnostics() {
     ports: runtime?.ports ?? {},
     dataDirectory: locations.root,
     logDirectory: locations.logs,
-    services: ["gpu", "optical", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: processes.has(name) })),
+    services: ["gpu", "optical", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: name === "gpu" && settings.gpuMode === "jetson" ? false : processes.has(name) })),
   };
 }
 
@@ -381,7 +401,13 @@ function registerIpc() {
     const prior = settings;
     const saved = await saveSettings(value);
     const providerChanged = ["activeAiMode", "llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
-    if (providerChanged) {
+    const connectionChanged = ["gpuMode", "jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
+    if (saved.gpuMode === "jetson" && (!saved.jetsonHost || !saved.desktopAdvertiseHost)) {
+      throw new Error("Jetson 模式需要填写 Jetson 地址和桌面可访问的 LAN 地址");
+    }
+    if (connectionChanged) {
+      await stopStack(); await startStack();
+    } else if (providerChanged && saved.gpuMode === "local") {
       await stopProcess("gpu");
       startService("gpu", runtime.ports.gpu);
       await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
@@ -391,6 +417,10 @@ function registerIpc() {
   });
   ipcMain.handle("desktop:diagnostics", () => diagnostics());
   ipcMain.handle("desktop:gpu:restart", async () => {
+    if (settings.gpuMode === "jetson") {
+      await waitFor(`http://${settings.jetsonHost}:${settings.jetsonApiPort}/health`, "Jetson GPU 服务", 5000);
+      return diagnostics();
+    }
     await stopProcess("gpu"); startService("gpu", runtime.ports.gpu);
     await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
     return diagnostics();

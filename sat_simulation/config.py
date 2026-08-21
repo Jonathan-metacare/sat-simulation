@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     gpu_gtx_host: str = "127.0.0.1"
     gpu_gtx_port: int = 9101
     platform_gtx_result_host: str = "127.0.0.1"
+    platform_gtx_result_bind_host: str | None = None
+    platform_gtx_result_advertise_host: str = "127.0.0.1"
     platform_gtx_result_port: int = 9102
     optical_payload_host: str = "127.0.0.1"
     optical_payload_port: int = 9300
@@ -41,6 +43,7 @@ class Settings(BaseSettings):
     llm_api_url: str | None = None
     llm_model: str = "gpt-4.1-mini"
     llm_api_key: str | None = None
+    llm_require_vision: bool = False
     provider_timeout_seconds: float = 80
     stage_animation_seconds: float = 8.0
 

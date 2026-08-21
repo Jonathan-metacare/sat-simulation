@@ -79,7 +79,7 @@ export interface MissionCommand {
   id: string; run_id: string; scenario_id: string; name: string;
   target_name: string; target_latitude: number; target_longitude: number;
   requested_at: string; scene_id: string; enable_ai: boolean;
-  ai_mode: AIMode; project_context: string; analysis_prompt: string;
+  ai_mode: AIMode; ai_model?: string | null; project_context: string; analysis_prompt: string;
   scene_asset_id?: string; l0_processor_id: string; l1_processor_id: string;
   scene_asset?: SceneAsset;
   processor_snapshots?: Record<string, { id: string; version: string; sha256: string }>;

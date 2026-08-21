@@ -73,6 +73,15 @@ class PlatformState:
         except Exception:
             return
 
+    async def report_processor_execution(self, execution: dict[str, Any]) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                await client.post(
+                    f"{self.settings.ground_http_url}/internal/processor-executions", json=execution
+                )
+        except Exception:
+            return
+
     async def start(self) -> None:
         self.product_dir.mkdir(parents=True, exist_ok=True)
         self.task_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +91,10 @@ class PlatformState:
             except (OSError, ValueError):
                 continue
         await self.uplink_receiver.start(self.settings.host, self.settings.platform_uplink_port)
-        await self.result_receiver.start(self.settings.host, self.settings.platform_gtx_result_port)
+        await self.result_receiver.start(
+            self.settings.platform_gtx_result_bind_host or self.settings.host,
+            self.settings.platform_gtx_result_port,
+        )
         await self.payload_result_receiver.start(
             self.settings.host, self.settings.platform_payload_result_port
         )
@@ -426,6 +438,13 @@ class PlatformState:
             context_path.write_text(
                 json.dumps(state["l1_context"], ensure_ascii=False, indent=2), "utf-8"
             )
+            state["l1_context"]["gpu_reply"] = {
+                "host": self.settings.platform_gtx_result_advertise_host,
+                "port": self.settings.platform_gtx_result_port,
+            }
+            context_path.write_text(
+                json.dumps(state["l1_context"], ensure_ascii=False, indent=2), "utf-8"
+            )
             context_manifest = ProductManifest(
                 run_id=command.run_id,
                 mission_id=mission_id,
@@ -439,6 +458,20 @@ class PlatformState:
                 lineage=[l0_manifest.name],
                 artifact_path=str(context_path),
             )
+            try:
+                async with httpx.AsyncClient(timeout=3) as client:
+                    health = (await client.get(f"{self.settings.gpu_http_url}/health"))
+                    health.raise_for_status()
+                    gpu_health = health.json()
+            except httpx.HTTPError as exc:
+                raise HTTPException(423, f"GPU Payload 离线，L1 已阻塞：{exc}") from exc
+            if gpu_health.get("version") != __version__:
+                raise HTTPException(
+                    423,
+                    f"GPU Payload 版本不一致（桌面 {__version__}，Jetson {gpu_health.get('version')}），请升级对应端。",
+                )
+            if command.l1_processor_id != "builtin-l1" and gpu_health.get("processor_runtime") != "ready":
+                raise HTTPException(423, "GPU Processor runtime 不可用，无法执行自定义 L1。")
             clock = self.clock_for(simulated_at)
             transport = TCPTransport(
                 profile=scenario.link_profile(LinkKind.GTX),
@@ -465,6 +498,8 @@ class PlatformState:
                 raise HTTPException(423 if "processor" in exc.code else 502, str(exc)) from exc
             if not transfer.response.get("l1b_sha256"):
                 raise HTTPException(502, "GPU 未返回 L1B 产品确认")
+            for execution in transfer.response.get("processor_executions", []):
+                await self.report_processor_execution(execution)
             if ProductLevel.L1B not in state["products"]:
                 raise HTTPException(502, "GPU 未通过 GTX 回传 L1_PRODUCTS")
             state["phase"] = MissionPhase.GTX_COMPLETE
@@ -527,6 +562,7 @@ class PlatformState:
                             "mission_id": mission_id,
                             "run_id": command.run_id,
                             "ai_mode": command.ai_mode,
+                            "ai_model": command.ai_model,
                             "options": {
                                 "project_context": command.project_context,
                                 "analysis_prompt": command.analysis_prompt,

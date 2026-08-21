@@ -55,6 +55,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/providers/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Provider Models */
+        get: operations["provider_models_api_providers_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenes/validate": {
         parameters: {
             query?: never;
@@ -878,6 +895,8 @@ export interface components {
             enable_ai: boolean;
             /** @default yolo */
             ai_mode: components["schemas"]["AIMode"];
+            /** Ai Model */
+            ai_model?: string | null;
             /**
              * Project Context
              * @default SpaceZenith-Sim 光学观测任务
@@ -927,6 +946,8 @@ export interface components {
             enable_ai: boolean;
             /** @default yolo */
             ai_mode: components["schemas"]["AIMode"];
+            /** Ai Model */
+            ai_model?: string | null;
             /**
              * Project Context
              * @default SpaceZenith-Sim 光学观测任务
@@ -1861,6 +1882,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    provider_models_api_providers_models_get: {
+        parameters: {
+            query: {
+                provider: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

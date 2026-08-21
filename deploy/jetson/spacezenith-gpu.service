@@ -1,0 +1,20 @@
+[Unit]
+Description=SpaceZenith GPU Payload (Jetson)
+After=network-online.target docker.service ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spacezenith
+Group=spacezenith
+EnvironmentFile=/etc/spacezenith-gpu.env
+WorkingDirectory=/opt/spacezenith-sim
+ExecStart=/opt/spacezenith-sim/.venv/bin/python -m uvicorn sat_simulation.services.gpu:app --host ${SAT_SIM_HOST} --port ${SAT_SIM_GPU_API_PORT}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/spacezenith-sim
+
+[Install]
+WantedBy=multi-user.target

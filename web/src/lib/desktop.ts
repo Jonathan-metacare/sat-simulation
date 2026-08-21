@@ -11,6 +11,12 @@ export type DesktopSettings = {
   yoloModel: string;
   yoloApiKey: string;
   providerTimeoutSeconds: number;
+  gpuMode: "local" | "jetson";
+  jetsonHost: string;
+  jetsonApiPort: number;
+  jetsonGtxPort: number;
+  desktopAdvertiseHost: string;
+  platformGtxResultPort: number;
 };
 
 export type DesktopDiagnostics = {

@@ -283,8 +283,9 @@ export function MissionDashboard() {
       if (scenarioActiveMission) {
         await api.cancelMission(scenarioActiveMission.command.id);
       }
+      const configuredModel = aiMode === "llm" ? (await desktopBridge()?.getSettings())?.llmModel : undefined;
       const created = await api.createMission(
-        scenario.config.id, t("mission.defaultName"), aiMode, projectContext.trim(), analysisPrompt.trim()
+        scenario.config.id, t("mission.defaultName"), aiMode, projectContext.trim(), analysisPrompt.trim(), configuredModel || undefined
       );
       setMission(created);
       setViewedMissionId(created.command.id);

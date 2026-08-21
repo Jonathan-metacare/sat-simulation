@@ -371,6 +371,7 @@ class MissionCommand(BaseModel):
     processor_snapshots: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_ai: bool = True
     ai_mode: AIMode = AIMode.YOLO
+    ai_model: str | None = Field(default=None, max_length=200)
     project_context: str = Field(default="SpaceZenith-Sim 光学观测任务", max_length=4000)
     analysis_prompt: str = Field(
         default="识别图像中的主要地物、目标和异常，说明判断依据与不确定性。",
@@ -389,6 +390,7 @@ class MissionCreate(BaseModel):
     scene_id: str = "demo-optical-scene"
     enable_ai: bool = True
     ai_mode: AIMode = AIMode.YOLO
+    ai_model: str | None = Field(default=None, max_length=200)
     project_context: str = Field(default="SpaceZenith-Sim 光学观测任务", max_length=4000)
     analysis_prompt: str = Field(
         default="识别图像中的主要地物、目标和异常，说明判断依据与不确定性。",

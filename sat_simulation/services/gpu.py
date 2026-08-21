@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import shutil
+import platform as system_platform
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,6 +70,7 @@ class GPUState:
         self.processor_dir = self.data_dir / "processors"
         self.receiver = TCPReceiver(self.handle_job)
         self.jobs: dict[str, dict[str, Any]] = {}
+        self.execution_reports: dict[str, list[dict[str, Any]]] = {}
         self.runner = ProcessorRunner(
             runtime=app_settings.oci_runtime, image=app_settings.processor_image
         )
@@ -89,14 +91,39 @@ class GPUState:
             return
 
     async def report_execution(self, execution: ProcessorExecution) -> None:
+        self.execution_reports.setdefault(execution.mission_id, []).append(
+            execution.model_dump(mode="json")
+        )
+        # Platform persists these ACK records through Ground.  This keeps the
+        # Jetson isolated from desktop HTTP in both local and remote modes.
+
+    async def vision_models(self) -> list[dict[str, Any]]:
+        if not self.settings.llm_api_url:
+            return []
+        base = self.settings.llm_api_url.rstrip("/")
         try:
-            async with httpx.AsyncClient(timeout=2) as client:
-                await client.post(
-                    f"{self.settings.ground_http_url}/internal/processor-executions",
-                    json=execution.model_dump(mode="json"),
-                )
-        except Exception:
-            return
+            async with httpx.AsyncClient(timeout=min(self.settings.provider_timeout_seconds, 10)) as client:
+                tags = (await client.get(f"{base}/api/tags")).json().get("models", [])
+                output: list[dict[str, Any]] = []
+                for item in tags:
+                    name = str(item.get("name") or item.get("model") or "")
+                    if not name:
+                        continue
+                    detail = (await client.post(f"{base}/api/show", json={"model": name})).json()
+                    capabilities = [str(capability) for capability in detail.get("capabilities", [])]
+                    if "vision" in capabilities:
+                        output.append({"name": name, "capabilities": capabilities})
+                return output
+        except (httpx.HTTPError, ValueError, KeyError):
+            return []
+
+    def reply_endpoint(self, value: dict[str, Any]) -> tuple[str, int]:
+        reply = value.get("gpu_reply") or {}
+        host = str(reply.get("host") or self.settings.platform_gtx_result_host).strip()
+        port = int(reply.get("port") or self.settings.platform_gtx_result_port)
+        if not host or not 1 <= port <= 65535:
+            raise ValueError("GPU reply endpoint is invalid")
+        return host, port
 
     async def start(self) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -320,6 +347,7 @@ class GPUState:
             if hashlib.sha256(context_content).hexdigest() != context_manifest.sha256:
                 raise ValueError("GTX L1 context SHA-256 mismatch")
             context = json.loads(context_content.decode("utf-8"))
+            reply_host, reply_port = self.reply_endpoint(context)
             mission_dir = self.jobs_dir / mission_id
             mission_dir.mkdir(parents=True, exist_ok=True)
             l0_path = mission_dir / l0_manifest.name
@@ -368,6 +396,7 @@ class GPUState:
                 "gtx_profile": context.get("gtx_profile"),
                 "status": "l1_ready",
                 "l1_processor_id": processor_id,
+                "reply_endpoint": {"host": reply_host, "port": reply_port},
             }
             clock = SimulationClock(
                 datetime.fromtimestamp(frame.simulated_time_ns / 1_000_000_000, tz=UTC), rate=1
@@ -383,8 +412,8 @@ class GPUState:
                 target_node=NodeKind.PLATFORM,
             )
             result = await transport.send(
-                self.settings.platform_gtx_result_host,
-                self.settings.platform_gtx_result_port,
+                reply_host,
+                reply_port,
                 run_id=l0_manifest.run_id,
                 mission_id=mission_id,
                 message_type=MessageType.L1_PRODUCTS,
@@ -399,6 +428,7 @@ class GPUState:
                 "l1b_sha256": l1b_manifest.sha256,
                 "l1_gtx_bytes": result.total_bytes,
                 "job_status": "l1_ready",
+                "processor_executions": self.execution_reports.pop(mission_id, []),
             }
 
         if message_type != MessageType.AI_EXECUTE:
@@ -431,9 +461,13 @@ class GPUState:
             else:
                 if not self.settings.llm_api_url:
                     raise ProviderBlocked("LLM 未配置：请设置 SAT_SIM_LLM_API_URL 后重试本步")
+                selected_model = str(request.get("ai_model") or self.settings.llm_model)
+                if self.settings.llm_require_vision:
+                    if selected_model not in {model["name"] for model in await self.vision_models()}:
+                        raise ProviderBlocked(f"LLM 模型不可用或不支持视觉：{selected_model}")
                 provider = OpenAICompatibleLanguageProvider(
                     self.settings.llm_api_url,
-                    model=self.settings.llm_model,
+                    model=selected_model,
                     timeout=self.settings.provider_timeout_seconds,
                     api_key=self.settings.llm_api_key,
                 )
@@ -478,8 +512,7 @@ class GPUState:
             target_node=NodeKind.PLATFORM,
         )
         transfer = await transport.send(
-            self.settings.platform_gtx_result_host,
-            self.settings.platform_gtx_result_port,
+            *self.reply_endpoint(job),
             run_id=str(request["run_id"]),
             mission_id=mission_id,
             message_type=MessageType.AI_RESULT,
@@ -578,6 +611,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             "status": "ok",
             "service": "gpu-node",
             "version": __version__,
+            "architecture": system_platform.machine(),
             "gtx_listener": app_settings.gpu_gtx_port,
             "providers": {
                 "detection": {
@@ -587,6 +621,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 "language": {
                     "status": "configured" if app_settings.llm_api_url else "not_configured",
                     "api_url_configured": bool(app_settings.llm_api_url),
+                    "vision_models": await state.vision_models(),
                 },
             },
             "processor_runtime": "ready" if await state.runner.available() else "unavailable",
@@ -606,6 +641,13 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         target = state.processor_dir / f"{processor_id or definition.id}.zip"
         target.write_bytes(content)
         return {"id": definition.id, "sha256": digest, "definition": definition}
+
+    @app.get("/internal/providers/ollama/models")
+    async def ollama_models() -> dict[str, Any]:
+        models = await state.vision_models()
+        if app_settings.llm_require_vision and not models:
+            raise HTTPException(503, "Ollama is unavailable or has no vision-capable model")
+        return {"provider": "ollama", "models": models}
 
     @app.get("/internal/jobs")
     async def jobs() -> dict[str, Any]:
