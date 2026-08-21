@@ -14,7 +14,6 @@
 | --- | --- | --- |
 | 已安装 macOS 桌面版 | `~/Library/Application Support/SpaceZenith-Sim/runtime-data/sat-simulation.db` | 同一 `runtime-data/` 下的 `ground/`、`platform/`、`optical/`、`gpu/`；桌面设置为 `~/Library/Application Support/SpaceZenith-Sim/desktop-settings.json` |
 | `pnpm desktop:dev` | 通常为 `~/Library/Application Support/Electron/runtime-data/sat-simulation.db` | 同一 Electron 用户数据目录；开发版窗口标题仍可为 SpaceZenith-Sim |
-| 四服务开发模式 | 默认 `./runtime-data/sat-simulation.db`，或 `SAT_SIM_DATABASE_URL` 指定的路径 | 每个 `SAT_SIM_DATA_DIR` 对应的目录 |
 
 先确认目标文件确实存在：
 

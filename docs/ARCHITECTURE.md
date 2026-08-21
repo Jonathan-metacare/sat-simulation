@@ -1,6 +1,7 @@
-# Architecture
+# 桌面 App 架构
 
-The V1 runs four isolated nodes plus a web client and SQLite/PostgreSQL persistence:
+桌面 App 在本机运行四个仿真节点、内嵌界面与 SQLite 持久化；`web` 仅指 Electron
+内嵌的渲染层，并不作为独立网络服务部署：
 
 ```text
 web -> ground-api --COMMAND/RESULT_REQUEST uplink TCP--> platform-node
@@ -12,10 +13,9 @@ web -> ground-api --COMMAND/RESULT_REQUEST uplink TCP--> platform-node
                     +--------- RESULT_PACKAGE downlink <--- platform
 ```
 
-Only `ground-api` is public. Scenario control is an out-of-band SIL management
-plane; mission commands and all flight products use the simulated links. Each
-node has a different volume. A read-only or staged scene is environmental sensor
-input, not a spacecraft product.
+Ground 是 App 内部唯一的 UI API；场景控制是带外 SIL 管理平面，任务命令与飞行产品
+均走模拟链路。每个节点有独立的本地数据目录。只读或暂存场景属于环境传感器输入，
+不是航天器产品。
 
 The ground node owns the authoritative run ID, frozen three-window SGP4 plan and
 simulation clock. A mission persists the macro phase
@@ -31,9 +31,10 @@ The final ground result
 package contains AI JSON, L1B, summary, manifests, STAC and thumbnail; it is created
 only after a mission-ID result request in the next Beijing pass.
 
-Built-in processors run in their owning node. Customer ZIP processors run only in
-a network-disabled, non-root OCI container with a read-only root filesystem and
-bounded CPU, memory, PIDs, time and output space. There is no host-Python fallback.
+Built-in processors run in their owning node. On the desktop, custom ZIP processors
+use the application-managed Seatbelt runner. On Jetson, custom L1 processors use a
+network-disabled, non-root OCI container with a read-only root filesystem and bounded
+CPU, memory, PIDs, time and output space. There is no host-Python fallback.
 
 The software intentionally does not model GTX PHY, SerDes, PCB signal integrity,
 RF modulation, or CCSDS conformance.

@@ -1,21 +1,14 @@
-# Custom processing validation assets
+# Custom processor source examples
 
-Run from the repository root:
+This directory contains minimal L0 and L1 source examples for people extending
+the App. The normal App workflow does not need these files: create a custom
+processor from the in-app processor workspace, edit it there, then select it
+for a scenario.
 
-```bash
-uv run python scripts/generate_custom_processing_examples.py
-```
+`l0_demo/` reconstructs OPTR RAW packets into `uint16 [band, height, width]`
+L0 NumPy data. `l1_demo/` writes L1A DN GeoTIFF and calibrated L1B GeoTIFF from
+L0 plus frozen ancillary data. The processor contract is documented in
+[Processor SDK](../../docs/PROCESSOR_SDK.md).
 
-It writes the following import-ready files to `examples/custom-processing/dist/`:
-
-- `demo-seattle-custom-input-16bit.tif`: deterministic 384 × 384, three-band,
-  uint16 GeoTIFF in EPSG:4326.
-- `demo-custom-l0-processor.zip`: validates and reconstructs OPTR RAW packets
-  into `uint16 [band, height, width]` L0 NumPy data.
-- `demo-custom-l1-processor.zip`: creates L1A DN GeoTIFF and calibrated L1B
-  GeoTIFF from L0 plus frozen ancillary data.
-
-Import the GeoTIFF from **Optical → Optical Scene Input**. Upload the L0 ZIP in
-**Optical → L0 Processor → Customized Processing**, and the L1 ZIP in
-**GPU Payload → L1 Processor → Customized Processing**. Each ZIP requires the
-local OCI runtime and `spacezenith/processor-python:3.12` image.
+Desktop custom processors use the built-in macOS Seatbelt runner. In Jetson
+mode custom L1 uses the `spacezenith/processor-python:3.12` Docker runtime.

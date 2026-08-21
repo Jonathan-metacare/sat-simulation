@@ -1,8 +1,11 @@
 # SpaceZenith-Sim 桌面版
 
-The desktop build embeds the Ground, Platform, Optical and GPU services inside one
-Electron application. It binds every service to `127.0.0.1`, creates its own
-ports per launch, and does not require Docker or a system Python installation.
+The desktop build embeds Ground, Platform, Optical and its UI inside one Electron
+application. In **Local GPU** mode it also embeds GPU Payload; all local services
+bind to `127.0.0.1` and use ports created for each launch. In **Jetson GPU** mode
+only the Platform GTX result listener is opened on the configured trusted LAN
+address; GPU Payload runs on the Jetson instead. The desktop App does not require
+Docker or a system Python installation.
 On macOS, both built-in and customer L0/L1 versions run through the
 application-managed Seatbelt executor. Customer code has no network, no user
 data-directory access and no host-Python fallback. Windows keeps custom
@@ -20,9 +23,9 @@ pnpm install
 pnpm desktop:dev
 ```
 
-`desktop:dev` launches the four services from the repository virtual
-environment and a local Next.js dev server. The app uses a temporary set of
-localhost ports, so it can run alongside the normal multi-terminal setup.
+`desktop:dev` launches the local App services from the repository virtual
+environment and its embedded Next.js renderer. It uses temporary localhost
+ports and does not require a separately deployed Web server.
 
 ## 构建 Apple Silicon DMG
 
@@ -62,7 +65,7 @@ pnpm desktop:dist:win
 和 AI Provider 设置。
 
 Windows 运行时不需要系统 Python 或本地模型。它会启动嵌入的 Ground、Platform、Optical、
-GPU 和 Web 服务，所有端口仅绑定 `127.0.0.1`。Ollama/YOLO 仍是用户可选的外部服务。
+GPU 与界面运行时，所有本地端口仅绑定 `127.0.0.1`。Ollama/YOLO 仍是用户可选的外部服务。
 
 Windows 用户数据、日志和设置由 Electron 存入标准 `%APPDATA%\\SpaceZenith-Sim\\`
 目录；可在应用设置的“关于”页打开数据与日志目录。
@@ -76,11 +79,23 @@ The app keeps all persistent state under:
 ```
 
 This includes SQLite, mission artifacts, service logs, and
-`desktop-settings.json`. The settings dialog configures Ollama/LLM and YOLO
-providers. Saving settings restarts only the embedded GPU service. Keys are
-stored locally with user-only file permissions and are never added to mission
-events or SQLite.
+`desktop-settings.json`. The settings dialog configures YOLO plus Local or
+Jetson GPU Payload. Switching Local/Jetson or changing Jetson connectivity
+restarts the App service stack; “Reconnect Jetson” only probes the remote
+service. Keys are stored locally with user-only file permissions and are never
+added to mission events or SQLite.
 
-The App does not bundle Ollama or model weights. For an existing local Ollama,
-set its endpoint to `http://127.0.0.1:11434` and choose an installed vision
-model in the desktop settings.
+The App does not bundle Ollama or model weights. In Local mode configure the
+provider endpoint in Settings. In Jetson mode Ollama must remain at
+`http://127.0.0.1:11434` on Jetson; Settings obtains only vision-capable models
+through the Jetson GPU service. See [Jetson GPU Payload](../deploy/jetson/README.md).
+
+## Jetson GPU 模式
+
+1. 按 [Jetson GPU Payload](../deploy/jetson/README.md) 安装与启动 Jetson 服务。
+2. 在 Settings → AI 选择 **Jetson GPU**，填写 Jetson LAN 地址和 Jetson 可访问的
+   Mac LAN 地址。
+3. 保存后重新打开 Settings，选择 Jetson 返回的视觉模型。
+
+Jetson 未连接、版本不一致、Ollama 无视觉模型或自定义 L1 Docker runtime 不可用时，
+App 仍可管理场景，但 L1/AI 阶段会阻塞，绝不自动改用本机 GPU。
