@@ -63,6 +63,10 @@ export interface ClockState {
   paused: boolean; revision: number;
 }
 export interface ScenarioRecord { config: ScenarioConfig; clock: ClockState; }
+export interface SatelliteCreateRequest {
+  satellite_name: string; tle_line1: string; tle_line2: string;
+  ground_station_name: string; latitude: number; longitude: number; altitude_m: number;
+}
 export interface ContactWindow {
   aos: string; los: string; max_elevation_at: string; max_elevation_deg: number;
 }

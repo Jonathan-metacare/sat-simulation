@@ -295,6 +295,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenarios/satellite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Satellite Scenario
+         * @description Create a basic scenario before its observation scene is uploaded.
+         */
+        post: operations["create_satellite_scenario_api_scenarios_satellite_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenarios/{scenario_id}/orbit": {
         parameters: {
             query?: never;
@@ -1436,6 +1456,26 @@ export interface components {
          * @enum {string}
          */
         ProtocolTransactionStatus: "running" | "completed" | "failed";
+        /**
+         * SatelliteCreateRequest
+         * @description The basic, user-authored fields for a new satellite scenario.
+         */
+        SatelliteCreateRequest: {
+            /** Satellite Name */
+            satellite_name: string;
+            /** Tle Line1 */
+            tle_line1: string;
+            /** Tle Line2 */
+            tle_line2: string;
+            /** Ground Station Name */
+            ground_station_name: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Altitude M */
+            altitude_m: number;
+        };
         /** ScenarioConfig */
         ScenarioConfig: {
             /** Id */
@@ -2325,6 +2365,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ScenarioConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_satellite_scenario_api_scenarios_satellite_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SatelliteCreateRequest"];
             };
         };
         responses: {

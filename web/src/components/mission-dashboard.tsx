@@ -20,6 +20,7 @@ import { ProtocolInspector } from "./protocol-inspector";
 import { OrbitGlobe } from "./orbit-globe";
 import { SystemTopology } from "./system-topology";
 import { DesktopSettingsPanel } from "./desktop-settings";
+import { NewSatelliteWizard } from "./new-satellite-wizard";
 import { desktopBridge } from "~/lib/desktop";
 
 const stages: Array<[MissionPhase, Parameters<typeof translate>[1]]> = [
@@ -83,6 +84,7 @@ export function MissionDashboard() {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
+  const [newSatelliteOpen, setNewSatelliteOpen] = useState(false);
   const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
   const [aiMode, setAiMode] = useState<AIMode>("yolo");
   const [projectContext, setProjectContext] = useState(() => t("mission.defaultProjectContext"));
@@ -142,13 +144,14 @@ export function MissionDashboard() {
       if (event.key !== "Escape") return;
       if (replaceConfirmOpen) { setReplaceConfirmOpen(false); return; }
       if (createOpen) { setCreateOpen(false); return; }
+      if (newSatelliteOpen) { setNewSatelliteOpen(false); return; }
       if (desktopSettingsOpen) { setDesktopSettingsOpen(false); return; }
       if (settingsMenuOpen) { setSettingsMenuOpen(false); return; }
       if (activeSidebar) setActiveSidebar(undefined);
     };
     window.addEventListener("keydown", closeTransientUi);
     return () => window.removeEventListener("keydown", closeTransientUi);
-  }, [activeSidebar, createOpen, desktopSettingsOpen, replaceConfirmOpen, settingsMenuOpen]);
+  }, [activeSidebar, createOpen, desktopSettingsOpen, newSatelliteOpen, replaceConfirmOpen, settingsMenuOpen]);
   useEffect(() => {
     document.documentElement.lang = localeTag(locale);
     window.localStorage.setItem("sat-sim-locale", locale);
@@ -306,6 +309,31 @@ export function MissionDashboard() {
     }
     setCreateOpen(true);
   };
+  const activateNewSatellite = async (selected: ScenarioRecord) => {
+    setWorking(true);
+    setError(undefined);
+    try {
+      if (mission && !["completed", "cancelled"].includes(mission.execution_state)) {
+        await api.cancelMission(mission.command.id);
+      }
+      setMission(undefined);
+      setViewedMissionId(undefined);
+      setHistoryView(false);
+      setHistoricalMissionUrl();
+      setSavedScenarioId(selected.config.id);
+      setScenario(selected);
+      setScenarioRecords(await api.scenarios());
+      setOrbit(await api.orbit(selected.config.id));
+      const bridge = desktopBridge();
+      if (bridge) {
+        const saved = await bridge.getSettings();
+        await bridge.saveSettings({ ...saved, activeScenarioId: selected.config.id });
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("errors.sceneSwitch"));
+      throw cause;
+    } finally { setWorking(false); }
+  };
   const advanceMission = () => mission && !historyView && run(async () => {
     await api.advanceMission(
       mission.command.id,
@@ -446,7 +474,7 @@ export function MissionDashboard() {
           <h1 className="text-2xl font-semibold tracking-tight text-slate-50 lg:text-3xl">{t("app.title")}</h1>
           {/* <p className="mt-1 text-xs text-slate-500">{t("app.subtitle")}</p> */}
         </div>
-        <Button onClick={requestCreateMission} active disabled={!scenario || working}><Zap size={14} />{t("actions.newMission")}</Button>
+        <div className="flex gap-2"><Button onClick={() => setNewSatelliteOpen(true)} active disabled={working}><Orbit size={14} />{t("actions.newSat")}</Button><Button onClick={requestCreateMission} active disabled={!scenario || working}><Zap size={14} />{t("actions.newMission")}</Button></div>
       </header>
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
@@ -476,6 +504,7 @@ export function MissionDashboard() {
           }
         })();
       }} />
+      {newSatelliteOpen && <NewSatelliteWizard locale={locale} onClose={() => setNewSatelliteOpen(false)} onCompleted={activateNewSatellite} />}
 
       <section className="panel mb-4 rounded-2xl p-2">
         <SystemTopology onNavigate={navigateTab} mission={topologyMission} locale={locale} />
@@ -486,7 +515,7 @@ export function MissionDashboard() {
 
       {activeTab === "ground" ? <>
 
-        <section className="mb-4 grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,1fr)]">
+        <section className="mb-4">
           <div className="panel flex min-w-0 flex-col overflow-hidden rounded-2xl">
             <PanelHeader icon={<Orbit size={16} />} title={t("ground.orbit")} note="TLE SNAPSHOT · SGP4" />
             <OrbitGlobe
@@ -505,7 +534,20 @@ export function MissionDashboard() {
               locale={locale}
             />
           </div>
-          <div className="flex flex-col gap-4">
+        </section>
+        <section className="mb-4 grid gap-4 xl:grid-cols-3">
+            <div className="panel rounded-2xl p-4">
+              <div className="mb-3 flex items-center justify-between"><Title icon={<Orbit size={16} />} text={t("ground.satelliteConfig")} /><span className="text-[10px] text-slate-500">{t("ground.satelliteConfigNote")}</span></div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <Metric label={t("ground.satelliteName")} value={viewedScenario?.config.satellite_name ?? "—"} good />
+                <Metric label={t("ground.sceneStatus")} value={viewedScenario?.config.scene_ready ? t("ground.sceneReady") : t("ground.scenePending")} good={viewedScenario?.config.scene_ready} />
+                <Metric label={t("ground.groundStation")} value={viewedScenario?.config.ground_station_name ?? "—"} />
+                <Metric label={t("ground.altitude")} value={`${Number(viewedScenario?.config.ground_station_altitude_m ?? 0).toFixed(0)} m`} />
+                <Metric label={t("ground.latitude")} value={`${Number(viewedScenario?.config.ground_station_latitude ?? 0).toFixed(4)}°`} />
+                <Metric label={t("ground.longitude")} value={`${Number(viewedScenario?.config.ground_station_longitude ?? 0).toFixed(4)}°`} />
+              </div>
+              <div className="mt-3 rounded-lg border border-white/[.055] bg-black/15 px-3 py-2"><div className="text-[9px] tracking-wider text-slate-600 uppercase">{t("ground.tle")}</div><div className="mt-1 break-all font-mono text-[10px] leading-4 text-slate-400">{viewedScenario?.config.tle_line1 ?? "—"}<br />{viewedScenario?.config.tle_line2 ?? ""}</div></div>
+            </div>
             <div className="panel flex-1 rounded-2xl p-4">
               <div className="mb-3 flex items-center justify-between"><Title icon={<Gauge size={16} />} text={t("ground.telemetry")} /><span className="text-[10px] text-emerald-300">{spacecraft?.in_contact === false ? t("ground.notVisible") : t("ground.visible")}</span></div>
               <div className="grid grid-cols-2 gap-3 text-xs">
@@ -530,7 +572,6 @@ export function MissionDashboard() {
                 <Metric label={t("ground.crcError")} value={String(mission?.transfers.reduce((sum, item) => sum + item.crc_failures, 0) ?? 0)} good />
               </div>
             </div>
-          </div>
         </section>
 
         <section className="space-y-4">

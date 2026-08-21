@@ -277,6 +277,26 @@ class ScenarioConfig(BaseModel):
         return self.links.get(kind, default_link_profiles()[kind])
 
 
+class SatelliteCreateRequest(BaseModel):
+    """The basic, user-authored fields for a new satellite scenario."""
+
+    satellite_name: str = Field(min_length=1, max_length=120)
+    tle_line1: str = Field(min_length=2, max_length=100)
+    tle_line2: str = Field(min_length=2, max_length=100)
+    ground_station_name: str = Field(min_length=1, max_length=120)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    altitude_m: float = Field(ge=-1000, le=100000)
+
+    @field_validator("satellite_name", "tle_line1", "tle_line2", "ground_station_name")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
 class StrictScenarioModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

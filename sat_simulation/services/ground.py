@@ -54,6 +54,7 @@ from sat_simulation.common.models import (
     ProtocolTransaction,
     ScenarioConfig,
     ScenarioControl,
+    SatelliteCreateRequest,
     SceneAsset,
     TelemetryEvent,
     TransferRecord,
@@ -110,6 +111,35 @@ PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
         MissionStatus.DOWNLINKING,
     ),
 }
+
+
+def new_satellite_config(body: SatelliteCreateRequest) -> ScenarioConfig:
+    """Validate a user-entered orbit and apply the safe scenario defaults."""
+    def valid_tle_line(line: str, line_number: str) -> bool:
+        if len(line) != 69 or not line.startswith(f"{line_number} ") or not line[-1].isdigit():
+            return False
+        checksum = sum(int(char) if char.isdigit() else 1 if char == "-" else 0 for char in line[:68])
+        return checksum % 10 == int(line[-1])
+
+    if not valid_tle_line(body.tle_line1, "1") or not valid_tle_line(body.tle_line2, "2"):
+        raise ValueError("TLE lines must have valid line numbers and checksums")
+    satellite = Satrec.twoline2rv(body.tle_line1, body.tle_line2)
+    if satellite.error:
+        raise ValueError(f"SGP4 error code {satellite.error}")
+    scenario_id = new_id("scenario")
+    return ScenarioConfig(
+        id=scenario_id,
+        name=body.satellite_name,
+        satellite_name=body.satellite_name,
+        tle_line1=body.tle_line1,
+        tle_line2=body.tle_line2,
+        ground_station_name=body.ground_station_name,
+        ground_station_latitude=body.latitude,
+        ground_station_longitude=body.longitude,
+        ground_station_altitude_m=body.altitude_m,
+        scene_id=f"{scenario_id}-scene",
+        scene_ready=False,
+    )
 
 # Telemetry stores a stable message key alongside its compatibility message.
 # Browser clients translate the key at render time, so event history also
@@ -1212,6 +1242,21 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     async def create_scenario(config: ScenarioConfig) -> dict[str, Any]:
         if await state.repo.get_scenario(config.id):
             raise HTTPException(409, "Scenario ID already exists.")
+        clock = SimulationClock(config.epoch, config.clock_rate)
+        state.clocks[config.id] = clock
+        await state.repo.create_scenario(config, clock.state())
+        return {"config": config, "clock": clock.state()}
+
+    @app.post("/api/scenarios/satellite")
+    async def create_satellite_scenario(body: SatelliteCreateRequest) -> dict[str, Any]:
+        """Create a basic scenario before its observation scene is uploaded."""
+        try:
+            config = new_satellite_config(body)
+        except Exception as exc:
+            raise HTTPException(
+                422,
+                detail=[{"path": "tle_line1", "message": f"Invalid TLE: {exc}"}],
+            ) from exc
         clock = SimulationClock(config.epoch, config.clock_rate)
         state.clocks[config.id] = clock
         await state.repo.create_scenario(config, clock.state())

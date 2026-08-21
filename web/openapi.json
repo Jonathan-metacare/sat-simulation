@@ -834,6 +834,47 @@
         }
       }
     },
+    "/api/scenarios/satellite": {
+      "post": {
+        "summary": "Create Satellite Scenario",
+        "description": "Create a basic scenario before its observation scene is uploaded.",
+        "operationId": "create_satellite_scenario_api_scenarios_satellite_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SatelliteCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Satellite Scenario Api Scenarios Satellite Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/scenarios/{scenario_id}/orbit": {
       "get": {
         "summary": "Get Scenario Orbit",
@@ -3454,6 +3495,64 @@
           "failed"
         ],
         "title": "ProtocolTransactionStatus"
+      },
+      "SatelliteCreateRequest": {
+        "properties": {
+          "satellite_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Satellite Name"
+          },
+          "tle_line1": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 2,
+            "title": "Tle Line1"
+          },
+          "tle_line2": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 2,
+            "title": "Tle Line2"
+          },
+          "ground_station_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Ground Station Name"
+          },
+          "latitude": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude"
+          },
+          "longitude": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude"
+          },
+          "altitude_m": {
+            "type": "number",
+            "maximum": 100000.0,
+            "minimum": -1000.0,
+            "title": "Altitude M"
+          }
+        },
+        "type": "object",
+        "required": [
+          "satellite_name",
+          "tle_line1",
+          "tle_line2",
+          "ground_station_name",
+          "latitude",
+          "longitude",
+          "altitude_m"
+        ],
+        "title": "SatelliteCreateRequest",
+        "description": "The basic, user-authored fields for a new satellite scenario."
       },
       "ScenarioConfig": {
         "properties": {
