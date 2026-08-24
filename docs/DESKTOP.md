@@ -94,7 +94,7 @@ through the Jetson GPU service. See [Jetson GPU Payload](../deploy/jetson/README
 
 ## Jetson GPU 模式
 
-1. 按 [Jetson GPU Payload](../deploy/jetson/README.md) 安装与启动 Jetson 服务。
+1. 按 [Jetson GPU Payload](../deploy/jetson/README.md) 构建、导入并启动 Jetson GPU API 镜像。
 2. 在 Settings → AI 选择 **Jetson GPU**，填写 Jetson LAN 地址和 Jetson 可访问的
    Mac LAN 地址。
 3. 保存后重新打开 Settings，选择 Jetson 返回的视觉模型。

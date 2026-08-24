@@ -54,7 +54,7 @@ Web 服务发布。应用数据清理与备份方式见 [数据维护](docs/DATA
 - `desktop/`：冻结 Python 服务的桌面入口。
 - `web/`：Electron、桌面 UI、Cesium 及安装包构建配置。
 - `sat_simulation/`：仿真核心、节点服务、场景和处理器逻辑。
-- `deploy/jetson/`：Jetson Orin GPU Payload 的 systemd 部署文件。
+- `deploy/jetson/`：Jetson Orin GPU Payload 的 ARM64 离线镜像构建、导入和运行配置。
 - `processor-runtime/`：仅 Jetson 自定义 L1 所需的 ARM64 Docker 运行时定义。
 - `scenarios/`：内置示例卫星与 GeoTIFF 场景。
 - `examples/`：可导入的自定义 L0/L1 处理器示例。

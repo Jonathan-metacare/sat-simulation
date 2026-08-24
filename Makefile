@@ -1,4 +1,4 @@
-.PHONY: install test lint web-install web-check desktop-dev desktop-dist
+.PHONY: install test lint web-install web-check desktop-dev desktop-dist jetson-export
 
 install:
 	uv sync --all-groups
@@ -21,3 +21,6 @@ desktop-dev:
 
 desktop-dist:
 	cd web && pnpm desktop:dist
+
+jetson-export:
+	./deploy/jetson/build-export.sh

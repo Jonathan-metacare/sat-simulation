@@ -1,0 +1,13 @@
+services:
+  gpu-api:
+    image: ${SAT_SIM_GPU_API_IMAGE:-spacezenith/sim-gpu-api:0.1.1}
+    container_name: spacezenith-gpu-api
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./spacezenith-gpu.env
+    volumes:
+      # This path must be identical inside the API container and on the host:
+      # child processor containers are created by the host Docker daemon.
+      - /var/lib/spacezenith-sim:/var/lib/spacezenith-sim
+      - /var/run/docker.sock:/var/run/docker.sock

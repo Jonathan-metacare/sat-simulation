@@ -19,3 +19,4 @@ web/release/
 runtime-data/
 *.log
 .pnpm-store
+/release/
