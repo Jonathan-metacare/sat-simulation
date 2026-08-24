@@ -78,7 +78,7 @@ export function NewSatelliteWizard({ locale, onClose, onCompleted }: Props) {
 
   const steps = [t("satellite.stepSatellite"), t("satellite.stepStation"), t("satellite.stepScene")];
   return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="new-satellite-title">
-    <section className="panel w-full max-w-xl rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
+    <section className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
       <div className="flex items-start justify-between gap-4"><div><h2 id="new-satellite-title" className="text-lg font-medium text-slate-50">{t("satellite.createTitle")}</h2><p className="mt-1 text-xs leading-5 text-slate-500">{t("satellite.createDescription")}</p></div><button onClick={onClose} disabled={working} className="rounded-lg border border-white/10 p-2 text-slate-400 hover:text-cyan-100"><X size={16} /></button></div>
       <div className="mt-5 grid grid-cols-3 gap-2">{steps.map((label, index) => <div key={label} className={`rounded-lg border px-2 py-2 text-center text-[10px] ${index === step ? "border-cyan-300/45 bg-cyan-300/10 text-cyan-100" : index < step ? "border-emerald-300/25 text-emerald-200" : "border-white/[.07] text-slate-500"}`}>{index + 1}. {label}</div>)}</div>
       {step === 0 && <div className="mt-5 space-y-4"><Field label={t("satellite.name")} value={satelliteName} onChange={setSatelliteName} /><Field label={t("satellite.tleLine1")} value={tleLine1} onChange={setTleLine1} /><Field label={t("satellite.tleLine2")} value={tleLine2} onChange={setTleLine2} /></div>}

@@ -43,6 +43,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .grid-scan { background-image: linear-gradient(var(--scan-a) 1px,transparent 1px),linear-gradient(90deg,var(--scan-b) 1px,transparent 1px); background-size: 28px 28px; }
 .workspace-shell { display:flex; width:100%; min-height:100vh; align-items:stretch; }
 .mission-content { flex:1 1 0%; min-width:0; }
+.ground-panel-pair { display:grid; gap:1rem; }
+@media (min-width:1024px) {
+  .ground-panel-pair { grid-template-columns:minmax(0,1.2fr) minmax(22.5rem,.8fr); }
+}
 .activity-bar { position:sticky; top:0; flex:0 0 var(--activity-bar-width); width:var(--activity-bar-width); height:100vh; background:rgba(3,14,23,.98); backdrop-filter:blur(16px); }
 .activity-bar-button { display:flex; align-items:center; justify-content:center; width:2.75rem; height:2.75rem; margin:.18rem 0; border:1px solid transparent; border-radius:.7rem; color:#7897a8; transition:color .18s ease,background .18s ease,border-color .18s ease; }
 .activity-bar-button:hover { color:#bff7ff; background:rgba(81,229,255,.1); border-color:rgba(81,229,255,.2); }

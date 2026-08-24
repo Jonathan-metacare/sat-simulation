@@ -355,7 +355,7 @@ export function OrbitGlobe({ track, station, target, locale = "zh" }: OrbitGlobe
   }, [locale, track]);
 
   return (
-    <div className="relative h-[360px] w-full flex-1 overflow-hidden bg-[#02080d] sm:h-[390px] xl:h-auto xl:min-h-[420px]">
+    <div className="relative h-[420px] w-full flex-1 overflow-hidden bg-[#02080d]" style={{ minHeight: 420 }}>
       <div ref={element} className="absolute inset-0" aria-label={translate(locale, "ground.orbit")} />
       {renderError && <div className="absolute inset-0 grid place-items-center bg-[#071722] text-xs text-cyan-100">{translate(locale, "orbit.renderError")}</div>}
       <div className="pointer-events-none absolute left-3 top-3 grid grid-cols-2 gap-2 sm:left-4 sm:top-4">

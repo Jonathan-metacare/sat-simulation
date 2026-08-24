@@ -516,7 +516,10 @@ export function MissionDashboard() {
 
       {activeTab === "ground" ? <>
 
-        <section className="mb-4">
+        <section
+          className="ground-panel-pair mb-4"
+          style={{ gridTemplateColumns: "minmax(0, 1.2fr) minmax(22.5rem, .8fr)" }}
+        >
           <div className="panel flex min-w-0 flex-col overflow-hidden rounded-2xl">
             <PanelHeader icon={<Orbit size={16} />} title={t("ground.orbit")} note="TLE SNAPSHOT · SGP4" />
             <OrbitGlobe
@@ -535,21 +538,24 @@ export function MissionDashboard() {
               locale={locale}
             />
           </div>
-        </section>
-        <section className="mb-4 grid gap-4 xl:grid-cols-3">
-            <div className="panel rounded-2xl p-4">
-              <div className="mb-3 flex items-center justify-between"><Title icon={<Orbit size={16} />} text={t("ground.satelliteConfig")} /><span className="text-[10px] text-slate-500">{t("ground.satelliteConfigNote")}</span></div>
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <Metric label={t("ground.satelliteName")} value={viewedScenario?.config.satellite_name ?? "—"} good />
-                <Metric label={t("ground.sceneStatus")} value={viewedScenario?.config.scene_ready ? t("ground.sceneReady") : t("ground.scenePending")} good={viewedScenario?.config.scene_ready} />
-                <Metric label={t("ground.groundStation")} value={viewedScenario?.config.ground_station_name ?? "—"} />
-                <Metric label={t("ground.altitude")} value={`${Number(viewedScenario?.config.ground_station_altitude_m ?? 0).toFixed(0)} m`} />
-                <Metric label={t("ground.latitude")} value={`${Number(viewedScenario?.config.ground_station_latitude ?? 0).toFixed(4)}°`} />
-                <Metric label={t("ground.longitude")} value={`${Number(viewedScenario?.config.ground_station_longitude ?? 0).toFixed(4)}°`} />
-              </div>
-              <div className="mt-3 rounded-lg border border-white/[.055] bg-black/15 px-3 py-2"><div className="text-[9px] tracking-wider text-slate-600 uppercase">{t("ground.tle")}</div><div className="mt-1 break-all font-mono text-[10px] leading-4 text-slate-400">{viewedScenario?.config.tle_line1 ?? "—"}<br />{viewedScenario?.config.tle_line2 ?? ""}</div></div>
+          <div className="panel rounded-2xl p-4">
+            <div className="mb-3 flex items-center justify-between"><Title icon={<Orbit size={16} />} text={t("ground.satelliteConfig")} /><span className="text-[10px] text-slate-500">{t("ground.satelliteConfigNote")}</span></div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <Metric label={t("ground.satelliteName")} value={viewedScenario?.config.satellite_name ?? "—"} good />
+              <Metric label={t("ground.sceneStatus")} value={viewedScenario?.config.scene_ready ? t("ground.sceneReady") : t("ground.scenePending")} good={viewedScenario?.config.scene_ready} />
+              <Metric label={t("ground.groundStation")} value={viewedScenario?.config.ground_station_name ?? "—"} />
+              <Metric label={t("ground.altitude")} value={`${Number(viewedScenario?.config.ground_station_altitude_m ?? 0).toFixed(0)} m`} />
+              <Metric label={t("ground.latitude")} value={`${Number(viewedScenario?.config.ground_station_latitude ?? 0).toFixed(4)}°`} />
+              <Metric label={t("ground.longitude")} value={`${Number(viewedScenario?.config.ground_station_longitude ?? 0).toFixed(4)}°`} />
             </div>
-            <div className="panel flex-1 rounded-2xl p-4">
+            <div className="mt-3 rounded-lg border border-white/[.055] bg-black/15 px-3 py-2"><div className="text-[9px] tracking-wider text-slate-600 uppercase">{t("ground.tle")}</div><div className="mt-1 break-all font-mono text-[10px] leading-4 text-slate-400">{viewedScenario?.config.tle_line1 ?? "—"}<br />{viewedScenario?.config.tle_line2 ?? ""}</div></div>
+          </div>
+        </section>
+        <section
+          className="ground-panel-pair mb-4"
+          style={{ gridTemplateColumns: "minmax(0, 1.2fr) minmax(22.5rem, .8fr)" }}
+        >
+            <div className="panel rounded-2xl p-4">
               <div className="mb-3 flex items-center justify-between"><Title icon={<Gauge size={16} />} text={t("ground.telemetry")} /><span className="text-[10px] text-emerald-300">{spacecraft?.in_contact === false ? t("ground.notVisible") : t("ground.visible")}</span></div>
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <Metric label={t("ground.latitude")} value={`${Number(spacecraft?.latitude ?? 0).toFixed(3)}°`} />

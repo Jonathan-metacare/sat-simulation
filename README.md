@@ -1,8 +1,9 @@
 # SpaceZenith-Sim
 
-SpaceZenith-Sim 是一个桌面仿真 App：在一台 Mac 或 Windows PC 上创建卫星和
-观测场景、执行端到端任务，并查看 Ground、Platform、Optical 与 GPU Payload 的
-仿真数据。它不再提供 Docker、PostgreSQL 或浏览器 Web 服务部署方案。
+SpaceZenith-Sim 是一个桌面仿真 App：在一台 Mac 或 Windows PC 上通过 **New Sat**
+创建卫星、地面站与观测场景，执行端到端任务，并查看 Ground、Platform、Optical 与
+GPU Payload 的仿真数据。项目只以完整 App 交付；不再支持前后端、Docker、PostgreSQL
+或浏览器 Web 服务的独立部署。
 
 ## 使用 App
 
@@ -10,9 +11,9 @@ SpaceZenith-Sim 是一个桌面仿真 App：在一台 Mac 或 Windows PC 上创�
 卫星、地面站与观测场景；也可在 Settings → Scene 中导入完整 YAML 场景。
 
 - 默认 **Local GPU**：Ground、Platform、Optical、GPU 和界面均由 App 在本机启动。
-- 可选 **Jetson GPU**：Mac 保留 Ground、Platform、Optical 与界面；Jetson 执行 L1、
-  自定义 L1 Docker 沙箱和 Ollama 视觉分析。Jetson 离线或版本不一致时任务 L1/AI
-  阶段明确阻塞，不会回退至 Mac。
+- 可选 **Jetson GPU**：Mac 保留 Ground、Platform、Optical 与界面；Jetson 执行 L1
+  处理（L1A/L1B/STAC）、自定义 L1 Docker 沙箱和 Ollama 视觉分析。Jetson 离线或
+  版本不一致时任务 L1/AI 阶段明确阻塞，不会回退至 Mac。
 
 详细使用、开发和打包方式见 [桌面版指南](docs/DESKTOP.md)。Jetson 部署方式见
 [Jetson GPU Payload](deploy/jetson/README.md)。

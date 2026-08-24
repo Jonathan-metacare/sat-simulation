@@ -1,7 +1,8 @@
 # 桌面 App 架构
 
-桌面 App 在本机运行四个仿真节点、内嵌界面与 SQLite 持久化；`web` 仅指 Electron
-内嵌的渲染层，并不作为独立网络服务部署：
+桌面 App 在本机运行 Ground、Platform、Optical、内嵌界面与 SQLite 持久化；`web`
+仅指 Electron 内嵌的渲染层。项目只交付完整 App，不提供独立前端、后端或浏览器 Web
+服务部署。L1/AI 可由 App 内嵌 GPU Payload 执行，或迁移到受信任 LAN 上的 Jetson：
 
 ```text
 web -> ground-api --COMMAND/RESULT_REQUEST uplink TCP--> platform-node
@@ -26,7 +27,8 @@ records an attempt and ends with both Ground and OBC clocks paused.
 Optical owns the selected scene input and generates RAW and L0. OBC receives
 both only through the framed Payload Bus. OBC packages L0 plus frozen orbit,
 attitude, georeference and calibration context into `L1_JOB`; GPU/Jetson produces
-L1A/L1B/STAC and returns `L1_PRODUCTS` over GTX. AI consumes only the verified L1B.
+L1A/L1B/STAC and returns `L1_PRODUCTS` over GTX. In Jetson GPU mode this is the
+remote L1 processing boundary; AI consumes only the verified L1B.
 The final ground result
 package contains AI JSON, L1B, summary, manifests, STAC and thumbnail; it is created
 only after a mission-ID result request in the next Beijing pass.

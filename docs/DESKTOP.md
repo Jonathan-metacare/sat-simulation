@@ -1,10 +1,12 @@
 # SpaceZenith-Sim 桌面版
 
 The desktop build embeds Ground, Platform, Optical and its UI inside one Electron
-application. In **Local GPU** mode it also embeds GPU Payload; all local services
-bind to `127.0.0.1` and use ports created for each launch. In **Jetson GPU** mode
-only the Platform GTX result listener is opened on the configured trusted LAN
-address; GPU Payload runs on the Jetson instead. The desktop App does not require
+application. It is the only supported delivery and runtime mode: the renderer and
+Python services are not deployed as separate frontend/backend services. In **Local
+GPU** mode it also embeds GPU Payload; all local services bind to `127.0.0.1` and
+use ports created for each launch. In **Jetson GPU** mode only the Platform GTX
+result listener is opened on the configured trusted LAN address; the Jetson runs
+the L1 (L1A/L1B/STAC) and AI payload instead. The desktop App does not require
 Docker or a system Python installation.
 On macOS, both built-in and customer L0/L1 versions run through the
 application-managed Seatbelt executor. Customer code has no network, no user
