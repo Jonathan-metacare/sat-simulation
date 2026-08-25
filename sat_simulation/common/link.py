@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from sat_simulation.common.protocol import (
     crc32c,
     read_frame,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _uuid(value: str) -> UUID:
@@ -243,7 +246,16 @@ class TCPTransport:
                 extra_ms = self.fault.extra_latency_ms if self.fault and self.fault.enabled else 0
                 await self._wait((self.profile.latency_ms + extra_ms) / 1000)
 
-                reply = await read_frame(reader)
+                try:
+                    reply = await read_frame(reader)
+                except asyncio.IncompleteReadError as exc:
+                    transaction.status = ProtocolTransactionStatus.FAILED
+                    transaction.completed_at = utc_now()
+                    await self._trace(transaction)
+                    raise RemoteTransferError(
+                        f"{self.profile.kind} peer closed the connection before replying",
+                        code="link_closed",
+                    ) from exc
                 response = json.loads(reply.payload.decode("utf-8"))
                 missing = {int(item) for item in response.get("missing", [])}
                 await self._trace(
@@ -343,7 +355,34 @@ class TCPReceiver:
                         await self._reply(writer, first, MessageType.NAK, {"missing": missing})
                         continue
                     payload = b"".join(chunks[index] for index in range(frame.total))
-                    result = await self.handler(first.message_type, payload, first)
+                    # Keep errors raised *by the handler* separate from transport
+                    # read errors.  In particular, a GPU handler can fail while
+                    # returning an L1/AI result over the reverse GTX path.  That
+                    # error must be visible and returned as a NAK instead of being
+                    # swallowed by the outer ConnectionError branch below.
+                    try:
+                        result = await self.handler(first.message_type, payload, first)
+                    except Exception as exc:
+                        logger.exception(
+                            "SIMF receiver handler failed (link=%s, message=%s, mission=%s)",
+                            first.link.name,
+                            first.message_type.name,
+                            first.mission_id,
+                        )
+                        try:
+                            await self._reply(
+                                writer,
+                                first,
+                                MessageType.NAK,
+                                {
+                                    "missing": [],
+                                    "error": str(exc),
+                                    "error_code": getattr(exc, "code", "handler_error"),
+                                },
+                            )
+                        except (ConnectionError, OSError):
+                            logger.warning("SIMF receiver could not return NAK to peer")
+                        break
                     await self._reply(
                         writer,
                         first,
@@ -355,17 +394,26 @@ class TCPReceiver:
         except (asyncio.IncompleteReadError, ConnectionError, ProtocolError):
             pass
         except Exception as exc:
+            logger.exception(
+                "SIMF receiver handler failed (link=%s, message=%s, mission=%s)",
+                first.link.name if first else "unknown",
+                first.message_type.name if first else "unknown",
+                first.mission_id if first else "unknown",
+            )
             if first is not None:
-                await self._reply(
-                    writer,
-                    first,
-                    MessageType.NAK,
-                    {
-                        "missing": [],
-                        "error": str(exc),
-                        "error_code": getattr(exc, "code", "handler_error"),
-                    },
-                )
+                try:
+                    await self._reply(
+                        writer,
+                        first,
+                        MessageType.NAK,
+                        {
+                            "missing": [],
+                            "error": str(exc),
+                            "error_code": getattr(exc, "code", "handler_error"),
+                        },
+                    )
+                except (ConnectionError, OSError):
+                    logger.warning("SIMF receiver could not return NAK to peer")
         finally:
             writer.close()
             await writer.wait_closed()

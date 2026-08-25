@@ -28,6 +28,7 @@ JSON application bodies are formatted after recursive redaction of keys matching
 size, SHA-256, manifest and member inventory; complete hex payloads are never stored.
 The independent Optical node uses a framed TCP Payload Bus (`PayloadDriver/1`).
 Platform sends `CAPTURE_REQUEST` and later `L0_PROCESS_REQUEST`; Optical returns
-`RAW_PRODUCT` and `L0_PRODUCT` on its reverse listener. L0 plus ancillary context
-crosses GTX as `L1_JOB`, while the Jetson/GPU returns `L1_PRODUCTS` on the reverse
-GTX listener. Each file envelope has per-frame CRC32C and an overall SHA-256.
+`RAW_PRODUCT` and `L0_PRODUCT` on its reverse listener. L0 plus ancillary context,
+and the selected custom L1 processor ZIP when applicable, cross GTX as `L1_JOB`.
+Jetson/GPU returns `L1_PRODUCTS` on the reverse GTX listener. Each file envelope
+has per-frame CRC32C and an overall SHA-256.

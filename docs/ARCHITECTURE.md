@@ -25,18 +25,20 @@ gtx_complete -> ai_complete -> completed`. Each advance runs exactly one phase,
 records an attempt and ends with both Ground and OBC clocks paused.
 
 Optical owns the selected scene input and generates RAW and L0. OBC receives
-both only through the framed Payload Bus. OBC packages L0 plus frozen orbit,
-attitude, georeference and calibration context into `L1_JOB`; GPU/Jetson produces
-L1A/L1B/STAC and returns `L1_PRODUCTS` over GTX. In Jetson GPU mode this is the
-remote L1 processing boundary; AI consumes only the verified L1B.
+both only through the framed Payload Bus. OBC packages L0, frozen orbit,
+attitude, georeference and calibration context, and the selected custom L1 ZIP
+when applicable into `L1_JOB`; GPU/Jetson produces L1A/L1B/STAC and returns
+`L1_PRODUCTS` over GTX. In Jetson GPU mode this is the remote L1 processing
+boundary; AI consumes only the verified L1B.
 The final ground result
 package contains AI JSON, L1B, summary, manifests, STAC and thumbnail; it is created
 only after a mission-ID result request in the next Beijing pass.
 
 Built-in processors run in their owning node. On the desktop, custom ZIP processors
-use the application-managed Seatbelt runner. On Jetson, custom L1 processors use a
-network-disabled, non-root OCI container with a read-only root filesystem and bounded
-CPU, memory, PIDs, time and output space. There is no host-Python fallback.
+use the application-managed Seatbelt runner. On Jetson, the custom L1 ZIP is
+delivered per mission over GTX and uses a network-disabled, non-root OCI container
+with a read-only root filesystem and bounded CPU, memory, PIDs, time and output
+space. There is no host-Python fallback.
 
 The software intentionally does not model GTX PHY, SerDes, PCB signal integrity,
 RF modulation, or CCSDS conformance.

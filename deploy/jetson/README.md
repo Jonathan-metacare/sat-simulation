@@ -3,9 +3,10 @@
 Jetson runs one persistent `gpu-api` Docker container. Ollama remains a
 host-managed service on `127.0.0.1:11434`. For each custom L1 request, the API
 uses the host Docker daemon to create a separate, restricted code-run container.
-The Mac sends `L1_JOB` and `AI_EXECUTE` to Jetson port `9101`; the API listens on
-`8002` for health and model discovery and returns products to the callback
-address embedded in every job.
+The Mac sends `L1_JOB` and `AI_EXECUTE` to Jetson port `9101`; a custom L1 ZIP is
+included in its `L1_JOB` GTX payload, verified by SHA-256, and used only for that
+mission. The API listens on `8002` only for health and model discovery and returns
+products to the callback address embedded in every job.
 
 ## Build and export on an Apple Silicon Mac
 

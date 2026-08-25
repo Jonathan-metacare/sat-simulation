@@ -229,6 +229,9 @@ class PlatformState:
 
         if message_type != MessageType.AI_RESULT:
             raise ValueError(f"unsupported GTX result type {message_type.name}")
+        return self.store_ai_result(payload)
+
+    def store_ai_result(self, payload: bytes) -> dict[str, Any]:
         body = unpack_json(payload)
         mission_id = str(body["mission_id"])
         state = self.missions.get(mission_id)
@@ -238,6 +241,9 @@ class PlatformState:
         content = pack_json(body)
         if hashlib.sha256(content).hexdigest() != expected:
             raise ValueError("AI_RESULT SHA-256 mismatch")
+        l1b = ProductManifest.model_validate(state["products"][ProductLevel.L1B])
+        if body.get("l1b_sha256") != l1b.sha256:
+            raise ValueError("AI_RESULT L1B SHA-256 mismatch")
         directory = self.product_dir / mission_id
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{mission_id}_ai_result.json"
@@ -259,6 +265,24 @@ class PlatformState:
         state["products"][ProductLevel.AI_RESULT] = manifest.model_dump(mode="json")
         self.persist(mission_id)
         return {"stored": True, "sha256": expected}
+
+    async def recover_ai_result(self, mission_id: str) -> bool:
+        """Recover a verified Jetson result when its reverse GTX ACK was lost."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(
+                    f"{self.settings.gpu_http_url}/internal/missions/{mission_id}/nodes/gpu/"
+                    "artifacts/ai_result"
+                )
+        except httpx.HTTPError:
+            return False
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        body = unpack_json(response.content)
+        body["sha256"] = hashlib.sha256(response.content).hexdigest()
+        self.store_ai_result(pack_json(body))
+        return True
 
     async def advance(self, mission_id: str, body: dict[str, Any]) -> dict[str, Any]:
         state = self.missions.get(mission_id)
@@ -310,6 +334,11 @@ class PlatformState:
                 )
             except RemoteTransferError as exc:
                 raise HTTPException(423 if "processor" in exc.code else 502, str(exc)) from exc
+            except OSError as exc:
+                # A TCP connect failure (for example, a temporary route loss to
+                # the Jetson) must remain a retryable GTX failure rather than
+                # escaping FastAPI as an opaque 500.
+                raise HTTPException(502, f"GPU GTX 链路不可达：{exc}") from exc
             if ProductLevel.RAW not in state["products"]:
                 raise HTTPException(502, "Optical 未通过载荷总线返回 RAW")
             manifest = ProductManifest.model_validate(state["products"][ProductLevel.RAW])
@@ -468,10 +497,51 @@ class PlatformState:
             if gpu_health.get("version") != __version__:
                 raise HTTPException(
                     423,
-                    f"GPU Payload 版本不一致（桌面 {__version__}，Jetson {gpu_health.get('version')}），请升级对应端。",
+                    "GPU Payload 版本不一致"
+                    f"（桌面 {__version__}，Jetson {gpu_health.get('version')}），请升级对应端。",
                 )
-            if command.l1_processor_id != "builtin-l1" and gpu_health.get("processor_runtime") != "ready":
+            if (
+                command.l1_processor_id != "builtin-l1"
+                and gpu_health.get("processor_runtime") != "ready"
+            ):
                 raise HTTPException(423, "GPU Processor runtime 不可用，无法执行自定义 L1。")
+            processor_manifest: ProductManifest | None = None
+            processor_path: Path | None = None
+            if command.l1_processor_id != "builtin-l1":
+                # Ground owns the source bundle. Fetching it locally is control
+                # plane work; the subsequent L1_JOB carries it over GTX to the
+                # Jetson alongside L0 and the frozen processing context.
+                try:
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        bundle = await client.get(
+                            f"{self.settings.ground_http_url}/api/processors/"
+                            f"{command.l1_processor_id}/download"
+                        )
+                        bundle.raise_for_status()
+                except httpx.HTTPError as exc:
+                    raise HTTPException(
+                        423, f"L1 处理器准备失败（{command.l1_processor_id}）：{exc}"
+                    ) from exc
+                processor_path = mission_dir / f"{command.l1_processor_id}.zip"
+                processor_path.write_bytes(bundle.content)
+                processor_manifest = ProductManifest(
+                    run_id=command.run_id,
+                    mission_id=mission_id,
+                    level=ProductLevel.PROCESSOR_BUNDLE,
+                    name=processor_path.name,
+                    mime_type="application/zip",
+                    size_bytes=processor_path.stat().st_size,
+                    sha256=sha256_file(processor_path),
+                    processing_parameters={"processor_id": command.l1_processor_id},
+                    quality={"gtx_delivered": True},
+                    lineage=[],
+                    artifact_path=str(processor_path),
+                )
+            gtx_manifests = [l0_manifest, context_manifest]
+            gtx_paths = {l0_manifest.id: l0_path, context_manifest.id: context_path}
+            if processor_manifest and processor_path:
+                gtx_manifests.append(processor_manifest)
+                gtx_paths[processor_manifest.id] = processor_path
             clock = self.clock_for(simulated_at)
             transport = TCPTransport(
                 profile=scenario.link_profile(LinkKind.GTX),
@@ -489,10 +559,7 @@ class PlatformState:
                     run_id=command.run_id,
                     mission_id=mission_id,
                     message_type=MessageType.L1_JOB,
-                    payload=pack_product_bundle(
-                        [l0_manifest, context_manifest],
-                        {l0_manifest.id: l0_path, context_manifest.id: context_path},
-                    ),
+                    payload=pack_product_bundle(gtx_manifests, gtx_paths),
                 )
             except RemoteTransferError as exc:
                 raise HTTPException(423 if "processor" in exc.code else 502, str(exc)) from exc
@@ -542,43 +609,59 @@ class PlatformState:
                 )
                 self.persist(mission_id)
                 return {"events": events, "phase": state["phase"]}
-            clock = self.clock_for(simulated_at)
-            transport = TCPTransport(
-                profile=scenario.link_profile(LinkKind.GTX),
-                clock=clock,
-                trace_sink=self.report_trace,
-                source_node=NodeKind.PLATFORM,
-                target_node=NodeKind.GPU,
-            )
-            try:
-                transfer = await transport.send(
-                    self.settings.gpu_gtx_host,
-                    self.settings.gpu_gtx_port,
-                    run_id=command.run_id,
-                    mission_id=mission_id,
-                    message_type=MessageType.AI_EXECUTE,
-                    payload=pack_json(
-                        {
-                            "mission_id": mission_id,
-                            "run_id": command.run_id,
-                            "ai_mode": command.ai_mode,
-                            "ai_model": command.ai_model,
-                            "options": {
-                                "project_context": command.project_context,
-                                "analysis_prompt": command.analysis_prompt,
-                                "mission_name": command.name,
-                                "target_name": command.target_name,
-                                "target_latitude": command.target_latitude,
-                                "target_longitude": command.target_longitude,
-                                "scene_id": command.scene_id,
-                            },
-                        }
-                    ),
+            recovered = await self.recover_ai_result(mission_id)
+            if recovered:
+                transfer_bytes = 0
+            else:
+                clock = self.clock_for(simulated_at)
+                transport = TCPTransport(
+                    profile=scenario.link_profile(LinkKind.GTX),
+                    clock=clock,
+                    trace_sink=self.report_trace,
+                    source_node=NodeKind.PLATFORM,
+                    target_node=NodeKind.GPU,
                 )
-            except RemoteTransferError as exc:
-                if exc.code == "provider_blocked":
-                    raise HTTPException(423, str(exc)) from exc
-                raise
+                try:
+                    transfer = await transport.send(
+                        self.settings.gpu_gtx_host,
+                        self.settings.gpu_gtx_port,
+                        run_id=command.run_id,
+                        mission_id=mission_id,
+                        message_type=MessageType.AI_EXECUTE,
+                        payload=pack_json(
+                            {
+                                "mission_id": mission_id,
+                                "run_id": command.run_id,
+                                "ai_mode": command.ai_mode,
+                                "ai_model": command.ai_model,
+                                "options": {
+                                    "project_context": command.project_context,
+                                    "analysis_prompt": command.analysis_prompt,
+                                    "mission_name": command.name,
+                                    "target_name": command.target_name,
+                                    "target_latitude": command.target_latitude,
+                                    "target_longitude": command.target_longitude,
+                                    "scene_id": command.scene_id,
+                                },
+                            }
+                        ),
+                    )
+                except RemoteTransferError as exc:
+                    if exc.code == "provider_blocked":
+                        raise HTTPException(423, str(exc)) from exc
+                    # The GPU writes and hashes ai_result.json before attempting
+                    # its reverse GTX callback.  If that callback loses a short
+                    # platform-listener window, recover the same verified result
+                    # immediately instead of requiring the user to run AI again.
+                    recovered = await self.recover_ai_result(mission_id)
+                    if not recovered:
+                        raise HTTPException(502, f"GPU AI GTX 链路失败：{exc}") from exc
+                    transfer_bytes = 0
+                else:
+                    transfer_bytes = transfer.total_bytes
+                    inline_result = transfer.response.get("ai_result")
+                    if isinstance(inline_result, dict):
+                        self.store_ai_result(pack_json(inline_result))
             if "ai_result" not in state:
                 raise HTTPException(502, "GPU 未通过 GTX 回传 AI_RESULT")
             state["phase"] = MissionPhase.AI_COMPLETE
@@ -586,8 +669,16 @@ class PlatformState:
                 {
                     "event_type": "ai_result_stored",
                     "status": MissionStatus.AI_PROCESSING,
-                    "message": "GPU 模型结果已通过 GTX 回传并由星务持久化。",
-                    "data": {"result": state["ai_result"], "gtx_bytes": transfer.total_bytes},
+                    "message": (
+                        "GPU 模型结果已通过 GTX 回传并由星务持久化。"
+                        if not recovered
+                        else "GPU GTX 回传未确认，星务已恢复并校验 Jetson 持久化结果。"
+                    ),
+                    "data": {
+                        "result": state["ai_result"],
+                        "gtx_bytes": transfer_bytes,
+                        "recovered_from_gpu": recovered,
+                    },
                 }
             )
         else:

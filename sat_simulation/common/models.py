@@ -591,6 +591,7 @@ class ProductLevel(StrEnum):
     L1A = "l1a"
     L1B = "l1b"
     AUX_CONTEXT = "aux_context"
+    PROCESSOR_BUNDLE = "processor_bundle"
     THUMBNAIL = "thumbnail"
     STAC = "stac"
     AI_RESULT = "ai_result"

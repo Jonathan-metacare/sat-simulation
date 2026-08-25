@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import shutil
+import logging
 import platform as system_platform
+import shutil
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,8 @@ from sat_simulation.payload.providers import (
 )
 from sat_simulation.processors import ProcessorBlocked, ProcessorRunner, inspect_processor_bundle
 from sat_simulation.processors.templates import builtin_template, workspace_bundle
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderBlocked(RuntimeError):
@@ -125,6 +128,51 @@ class GPUState:
             raise ValueError("GPU reply endpoint is invalid")
         return host, port
 
+    async def send_gtx_reply(
+        self,
+        transport: TCPTransport,
+        endpoint: tuple[str, int],
+        *,
+        run_id: str,
+        mission_id: str,
+        message_type: MessageType,
+        payload: bytes,
+    ):
+        """Return a result over GTX, tolerating a short platform restart window."""
+        host, port = endpoint
+        for attempt in range(1, 4):
+            try:
+                logger.info(
+                    "GPU GTX reply (message=%s, mission=%s, target=%s:%s, attempt=%s)",
+                    message_type.name,
+                    mission_id,
+                    host,
+                    port,
+                    attempt,
+                )
+                return await transport.send(
+                    host,
+                    port,
+                    run_id=run_id,
+                    mission_id=mission_id,
+                    message_type=message_type,
+                    payload=payload,
+                )
+            except ConnectionRefusedError:
+                if attempt == 3:
+                    raise
+                logger.warning(
+                    "GPU GTX reply target refused connection; retrying in %ss "
+                    "(message=%s, mission=%s, target=%s:%s)",
+                    attempt,
+                    message_type.name,
+                    mission_id,
+                    host,
+                    port,
+                )
+                await asyncio.sleep(attempt)
+        raise RuntimeError("unreachable GTX retry state")
+
     async def start(self) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.processor_dir.mkdir(parents=True, exist_ok=True)
@@ -171,11 +219,14 @@ class GPUState:
         l0_manifest: ProductManifest,
         l0_path: Path,
         context: dict[str, Any],
+        processor_bundle_path: Path | None = None,
     ) -> OpticalProducts:
-        bundle = self.processor_dir / f"{processor_id}.zip"
+        bundle = processor_bundle_path or self.processor_dir / f"{processor_id}.zip"
         if not bundle.is_file():
-            raise ProcessorBlocked(f"GPU 未安装 L1 处理器 {processor_id}")
+            raise ProcessorBlocked(f"GPU 未收到 L1 处理器 {processor_id} 的 GTX 代码包")
         definition, _bundle_sha = inspect_processor_bundle(bundle.read_bytes())
+        if definition.stage != ProcessorStage.L1:
+            raise ProcessorBlocked("GTX 代码包不是 L1 处理器")
         context_path = mission_dir / f"{mission_id}_processor_context.json"
         context_path.write_text(json.dumps(context, ensure_ascii=False, indent=2), "utf-8")
         execution = ProcessorExecution(
@@ -357,6 +408,27 @@ class GPUState:
                 SensorConfig(seed=int(context.get("sensor_seed") or 20260811), **sensor)
             )
             processor_id = str(context.get("l1_processor_id") or "builtin-l1")
+            processor_bundle_path: Path | None = None
+            if processor_id != "builtin-l1":
+                processor_manifest = next(
+                    (item for item in manifests if item.level == ProductLevel.PROCESSOR_BUNDLE),
+                    None,
+                )
+                if not processor_manifest:
+                    raise ProcessorBlocked(f"GTX L1_JOB 缺少处理器代码包 {processor_id}")
+                if processor_manifest.processing_parameters.get("processor_id") != processor_id:
+                    raise ProcessorBlocked("GTX L1 处理器代码包与任务处理器不匹配")
+                processor_content = files[processor_manifest.name]
+                if hashlib.sha256(processor_content).hexdigest() != processor_manifest.sha256:
+                    raise ProcessorBlocked("GTX L1 处理器代码包 SHA-256 校验失败")
+                processor_snapshot = dict(context.get("processor_snapshots", {}).get("l1") or {})
+                if (
+                    processor_snapshot.get("id") != processor_id
+                    or processor_snapshot.get("sha256") != processor_manifest.sha256
+                ):
+                    raise ProcessorBlocked("GTX L1 处理器代码包与冻结任务快照不匹配")
+                processor_bundle_path = mission_dir / processor_manifest.name
+                processor_bundle_path.write_bytes(processor_content)
             if processor_id == "builtin-l1" and self.settings.oci_runtime != "desktop-sandbox":
                 products = await asyncio.to_thread(
                     pipeline.process_l1_from_l0,
@@ -379,6 +451,7 @@ class GPUState:
                     l0_manifest=l0_manifest,
                     l0_path=l0_path,
                     context=context,
+                    processor_bundle_path=processor_bundle_path,
                 )
             l1b_manifest = next(
                 item for item in products.manifests if item.level == ProductLevel.L1B
@@ -411,9 +484,9 @@ class GPUState:
                 source_node=NodeKind.GPU,
                 target_node=NodeKind.PLATFORM,
             )
-            result = await transport.send(
-                reply_host,
-                reply_port,
+            result = await self.send_gtx_reply(
+                transport,
+                (reply_host, reply_port),
                 run_id=l0_manifest.run_id,
                 mission_id=mission_id,
                 message_type=MessageType.L1_PRODUCTS,
@@ -499,31 +572,15 @@ class GPUState:
         canonical_result = pack_json(result_body)
         result_path.write_bytes(canonical_result)
         result_body["sha256"] = hashlib.sha256(canonical_result).hexdigest()
-        clock = SimulationClock(
-            datetime.fromtimestamp(frame.simulated_time_ns / 1_000_000_000, tz=UTC), rate=1
-        )
-        transport = TCPTransport(
-            profile=LinkProfile.model_validate(
-                job.get("gtx_profile") or {"kind": "gtx", "bandwidth_bps": 2.5e9, "latency_ms": 0.2}
-            ),
-            clock=clock,
-            trace_sink=self.report_trace,
-            source_node=NodeKind.GPU,
-            target_node=NodeKind.PLATFORM,
-        )
-        transfer = await transport.send(
-            *self.reply_endpoint(job),
-            run_id=str(request["run_id"]),
-            mission_id=mission_id,
-            message_type=MessageType.AI_RESULT,
-            payload=pack_json(result_body),
-        )
         job.update({"status": "completed", "result": result_body})
         self.save_job(mission_id)
+        # AI results are small.  Return them in the ACK on the existing GTX
+        # request connection rather than opening a second Jetson -> platform
+        # callback connection after the long-running model invocation.
         return {
             "job_status": "completed",
             "result_sha256": result_body["sha256"],
-            "result_gtx_bytes": transfer.total_bytes,
+            "ai_result": result_body,
         }
 
     def node_snapshot(self, mission_id: str) -> NodeSnapshot:
