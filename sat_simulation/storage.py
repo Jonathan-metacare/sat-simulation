@@ -201,6 +201,31 @@ class LatestSatelliteOMMRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class SatnogsGroundStationRow(Base):
+    """One current local search record for each SatNOGS station."""
+
+    __tablename__ = "satnogs_ground_stations"
+    station_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    latitude: Mapped[float] = mapped_column()
+    longitude: Mapped[float] = mapped_column()
+    altitude_m: Mapped[float] = mapped_column()
+    min_horizon: Mapped[float | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String(40))
+    created: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    last_seen: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CatalogMetadataRow(Base):
+    __tablename__ = "catalog_metadata"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(30))
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Repository:
     def __init__(self, database_url: str) -> None:
         if database_url.startswith("sqlite"):
@@ -352,6 +377,63 @@ class Repository:
                     "tle_line1": row.tle_line1, "tle_line2": row.tle_line2,
                     "content_hash": row.content_hash, "last_checked_at": row.last_checked_at,
                     "updated_at": row.updated_at,
+                }
+                for row in rows
+            ]
+
+    async def catalog_status(self, key: str) -> str | None:
+        async with self.session() as session:
+            row = await session.get(CatalogMetadataRow, key)
+            return row.status if row else None
+
+    async def set_catalog_status(
+        self, key: str, status: str, last_error: str | None = None
+    ) -> None:
+        async with self.session() as session:
+            row = await session.get(CatalogMetadataRow, key)
+            if row is None:
+                session.add(CatalogMetadataRow(
+                    key=key, status=status, last_error=last_error, updated_at=now_utc()
+                ))
+                return
+            row.status = status
+            row.last_error = last_error
+            row.updated_at = now_utc()
+
+    async def upsert_satnogs_ground_stations(self, stations: list[dict[str, Any]]) -> None:
+        async with self.session() as session:
+            for station in stations:
+                station_id = station["station_id"]
+                row = await session.get(SatnogsGroundStationRow, station_id)
+                if row is None:
+                    session.add(SatnogsGroundStationRow(**station, updated_at=now_utc()))
+                    continue
+                for key, value in station.items():
+                    setattr(row, key, value)
+                row.updated_at = now_utc()
+
+    async def search_satnogs_ground_stations(
+        self, name: str, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        pattern = f"%{name.strip().lower()}%"
+        async with self.session() as session:
+            rows = (
+                await session.scalars(
+                    select(SatnogsGroundStationRow)
+                    .where(SatnogsGroundStationRow.name.ilike(pattern))
+                    .order_by(SatnogsGroundStationRow.name, SatnogsGroundStationRow.station_id)
+                    .limit(limit)
+                )
+            ).all()
+            return [
+                {
+                    "station_id": row.station_id,
+                    "name": row.name,
+                    "latitude": row.latitude,
+                    "longitude": row.longitude,
+                    "altitude_m": row.altitude_m,
+                    "min_horizon": row.min_horizon,
+                    "status": row.status,
                 }
                 for row in rows
             ]

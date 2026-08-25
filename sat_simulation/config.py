@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     stage_animation_seconds: float = 8.0
     keeptrack_api_key: str | None = None
     keeptrack_api_url: str = "https://api.keeptrack.space/v4/sat/{norad}/omm"
+    satnogs_station_api_url: str = "https://network.satnogs.org/api/stations/"
 
     @property
     def cors_origins(self) -> list[str]:

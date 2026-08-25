@@ -71,6 +71,14 @@ export interface SatelliteNoradLookup {
   norad_id: number; satellite_name: string; omm_epoch: string;
   tle_line1: string; tle_line2: string; checked_at: string;
 }
+export interface GroundStationSearchResult {
+  station_id: number; name: string; latitude: number; longitude: number;
+  altitude_m: number; min_horizon: number | null; status: string;
+}
+export interface GroundStationSearchResponse {
+  status: "ready" | "initializing" | "failed";
+  results: GroundStationSearchResult[];
+}
 export interface ContactWindow {
   aos: string; los: string; max_elevation_at: string; max_elevation_deg: number;
 }

@@ -1,4 +1,4 @@
-import type { AIMode, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProcessorSource, ProcessorStage, ProcessorTemplate, ProcessorVersion, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, SatelliteCreateRequest, SatelliteNoradLookup, ScenarioConfig, ScenarioRecord, SceneAsset, SceneRecord, TransferRecord } from "./types";
+import type { AIMode, GroundStationSearchResponse, MissionDetail, MissionResultResponse, MissionSummary, NodeKind, NodeSnapshot, OrbitTrack, ProcessorSource, ProcessorStage, ProcessorTemplate, ProcessorVersion, ProtocolFrameTrace, ProtocolTransaction, PublicConfig, SatelliteCreateRequest, SatelliteNoradLookup, ScenarioConfig, ScenarioRecord, SceneAsset, SceneRecord, TransferRecord } from "./types";
 import { desktopBridge } from "./desktop";
 
 export const API_BASE = (desktopBridge()?.apiBase ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/$/, "");
@@ -50,6 +50,7 @@ export const api = {
   createScenario:(name:string)=>request<ScenarioRecord>("/scenarios",{method:"POST",body:JSON.stringify({name,clock_rate:10})}),
   createSatellite:(body:SatelliteCreateRequest)=>request<ScenarioRecord>("/scenarios/satellite",{method:"POST",body:JSON.stringify(body)}),
   lookupSatelliteNorad:(noradId:number)=>request<SatelliteNoradLookup>(`/satellites/norad/${noradId}`,{method:"POST"}),
+  searchGroundStations:(name:string)=>request<GroundStationSearchResponse>(`/ground-stations?name=${encodeURIComponent(name)}`),
   importScenarioYaml:(file:File)=>upload<{config:ScenarioConfig;clock:ScenarioRecord["clock"];validation:{status:string;scene_ready:boolean;required_scene_id:string}}>("/scenarios/import/yaml",file),
   validateScene:(file:File,sceneId:string,geo?:{centerLatitude?:number;centerLongitude?:number;pixelSize?:number;crs?:string})=>uploadWithFields<{status:string;asset:SceneAsset}>("/scenes/validate",file,{scene_id:sceneId,center_latitude:geo?.centerLatitude,center_longitude:geo?.centerLongitude,pixel_size:geo?.pixelSize,crs:geo?.crs}),
   importScene:(file:File,sceneId:string,scenarioId?:string,geo?:{centerLatitude?:number;centerLongitude?:number;pixelSize?:number;crs?:string})=>uploadWithFields<{id:string;sha256:string;metadata:SceneAsset;scene_ready:boolean}>("/scenes/import",file,{scene_id:sceneId,scenario_id:scenarioId,center_latitude:geo?.centerLatitude,center_longitude:geo?.centerLongitude,pixel_size:geo?.pixelSize,crs:geo?.crs}),

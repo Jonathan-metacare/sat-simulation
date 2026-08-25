@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 from uuid import uuid4
 
 import httpx
@@ -68,6 +69,7 @@ from sat_simulation.common.orbit import orbit_track, plan_mission_windows
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
 from sat_simulation.config import Settings, settings
+from sat_simulation.ground_stations import normalize_satnogs_station
 from sat_simulation.omm import extract_omm, omm_hash, omm_to_tle
 from sat_simulation.optical.pipeline import ensure_demo_scene, sha256_file
 from sat_simulation.optical.scenes import validate_and_convert_scene
@@ -119,6 +121,7 @@ PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
 }
 
 logger = logging.getLogger(__name__)
+SATNOGS_CATALOG_KEY = "satnogs_ground_stations_v1"
 
 
 def new_satellite_config(body: SatelliteCreateRequest) -> ScenarioConfig:
@@ -195,6 +198,8 @@ class GroundState:
         # Refresh is deliberately detached from startup: cached or manual TLE input
         # remains usable while KeepTrack is unreachable.
         self._track_task(asyncio.create_task(self.refresh_stale_omm_cache()))
+        if await self.repo.catalog_status(SATNOGS_CATALOG_KEY) != "complete":
+            self._track_task(asyncio.create_task(self.import_satnogs_ground_stations()))
 
     def _track_task(self, task: asyncio.Task[Any]) -> None:
         self.tasks.add(task)
@@ -261,6 +266,53 @@ class GroundState:
                     entry["norad_id"],
                     exc_info=True,
                 )
+
+    async def import_satnogs_ground_stations(self) -> None:
+        """Build the local station directory once, without delaying service readiness."""
+        if await self.repo.catalog_status(SATNOGS_CATALOG_KEY) == "complete":
+            return
+        await self.repo.set_catalog_status(SATNOGS_CATALOG_KEY, "importing")
+        url = self.settings.satnogs_station_api_url
+        visited: set[str] = set()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                while url and url not in visited:
+                    visited.add(url)
+                    response = await client.get(url, headers={"Accept": "application/json"})
+                    response.raise_for_status()
+                    payload = response.json()
+                    if isinstance(payload, list):
+                        candidates = payload
+                        next_url = None
+                    elif isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                        candidates = payload["results"]
+                        next_url = payload.get("next")
+                    else:
+                        raise ValueError("SatNOGS station response is neither a list nor a paginated result")
+                    stations: list[dict[str, Any]] = []
+                    for candidate in candidates:
+                        if not isinstance(candidate, dict):
+                            continue
+                        try:
+                            stations.append(normalize_satnogs_station(candidate))
+                        except ValueError:
+                            logger.warning("Skipping invalid station payload", exc_info=True)
+                    if stations:
+                        await self.repo.upsert_satnogs_ground_stations(stations)
+                    url = urljoin(str(response.url), str(next_url)) if next_url else ""
+            await self.repo.set_catalog_status(SATNOGS_CATALOG_KEY, "complete")
+        except Exception as exc:
+            await self.repo.set_catalog_status(SATNOGS_CATALOG_KEY, "failed", str(exc))
+            logger.warning("Station catalog import failed", exc_info=True)
+
+    async def search_ground_stations(self, name: str) -> dict[str, Any]:
+        status = await self.repo.catalog_status(SATNOGS_CATALOG_KEY)
+        if status != "complete":
+            return {"status": "initializing" if status in (None, "importing") else "failed", "results": []}
+        return {
+            "status": "ready",
+            "results": await self.repo.search_satnogs_ground_stations(name),
+        }
 
     async def ensure_default_scene(self) -> None:
         """Install the versioned Beijing fixture into the writable runtime data."""
@@ -1364,6 +1416,11 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             raise HTTPException(422, str(exc)) from exc
         except ConnectionError as exc:
             raise HTTPException(502, str(exc)) from exc
+
+    @app.get("/api/ground-stations")
+    async def search_ground_stations(name: str = Query(min_length=1, max_length=120)) -> dict[str, Any]:
+        """Search the initialized local SatNOGS directory; never performs a live lookup."""
+        return await state.search_ground_stations(name)
 
     @app.get("/api/scenarios")
     async def list_scenarios() -> list[dict[str, Any]]:
