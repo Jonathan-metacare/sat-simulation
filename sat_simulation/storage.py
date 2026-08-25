@@ -186,6 +186,21 @@ class ProcessorExecutionRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class LatestSatelliteOMMRow(Base):
+    """The current OMM only; historical element sets belong in sat-hud."""
+
+    __tablename__ = "latest_satellite_omm"
+    norad_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    satellite_name: Mapped[str] = mapped_column(String(160))
+    omm_epoch: Mapped[str] = mapped_column(String(80))
+    omm_json: Mapped[str] = mapped_column(Text)
+    tle_line1: Mapped[str] = mapped_column(String(69))
+    tle_line2: Mapped[str] = mapped_column(String(69))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Repository:
     def __init__(self, database_url: str) -> None:
         if database_url.startswith("sqlite"):
@@ -286,6 +301,57 @@ class Repository:
                 {
                     "config": ScenarioConfig.model_validate_json(row.config_json),
                     "clock": SimulationClockState.model_validate_json(row.clock_json),
+                }
+                for row in rows
+            ]
+
+    async def upsert_latest_satellite_omm(
+        self,
+        *,
+        norad_id: int,
+        satellite_name: str,
+        omm_epoch: str,
+        omm: dict[str, Any],
+        tle_line1: str,
+        tle_line2: str,
+        content_hash: str,
+        checked_at: datetime | None = None,
+    ) -> None:
+        checked_at = checked_at or now_utc()
+        async with self.session() as session:
+            row = await session.get(LatestSatelliteOMMRow, norad_id)
+            if row is None:
+                session.add(LatestSatelliteOMMRow(
+                    norad_id=norad_id,
+                    satellite_name=satellite_name,
+                    omm_epoch=omm_epoch,
+                    omm_json=json.dumps(omm, sort_keys=True),
+                    tle_line1=tle_line1,
+                    tle_line2=tle_line2,
+                    content_hash=content_hash,
+                    last_checked_at=checked_at,
+                    updated_at=checked_at,
+                ))
+                return
+            row.satellite_name = satellite_name
+            row.omm_epoch = omm_epoch
+            row.omm_json = json.dumps(omm, sort_keys=True)
+            row.tle_line1 = tle_line1
+            row.tle_line2 = tle_line2
+            row.content_hash = content_hash
+            row.last_checked_at = checked_at
+            row.updated_at = checked_at
+
+    async def cached_latest_satellite_omm(self) -> list[dict[str, Any]]:
+        async with self.session() as session:
+            rows = (await session.scalars(select(LatestSatelliteOMMRow))).all()
+            return [
+                {
+                    "norad_id": row.norad_id, "satellite_name": row.satellite_name,
+                    "omm_epoch": row.omm_epoch, "omm": json.loads(row.omm_json),
+                    "tle_line1": row.tle_line1, "tle_line2": row.tle_line2,
+                    "content_hash": row.content_hash, "last_checked_at": row.last_checked_at,
+                    "updated_at": row.updated_at,
                 }
                 for row in rows
             ]

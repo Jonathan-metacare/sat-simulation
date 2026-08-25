@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     llm_require_vision: bool = False
     provider_timeout_seconds: float = 80
     stage_animation_seconds: float = 8.0
+    keeptrack_api_key: str | None = None
+    keeptrack_api_url: str = "https://api.keeptrack.space/v4/sat/{norad}/omm"
 
     @property
     def cors_origins(self) -> list[str]:

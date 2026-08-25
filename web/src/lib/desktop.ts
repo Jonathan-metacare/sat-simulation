@@ -4,6 +4,7 @@ export type DesktopSettings = {
   activeAiMode: "yolo" | "llm";
   activeScenarioId: string;
   cesiumIonToken: string;
+  keeptrackApiKey: string;
   llmApiUrl: string;
   llmModel: string;
   llmApiKey: string;

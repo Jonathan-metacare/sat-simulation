@@ -16,6 +16,7 @@ const defaultSettings = {
   activeAiMode: "yolo",
   activeScenarioId: "scenario-demo-beijing",
   cesiumIonToken: "",
+  keeptrackApiKey: "",
   // A provider is an optional external integration.  Do not probe a local
   // Ollama endpoint until the user explicitly configures and enables LLM.
   llmApiUrl: "",
@@ -79,6 +80,7 @@ function cleanSettings(value) {
     activeAiMode: value?.activeAiMode === "llm" ? "llm" : "yolo",
     activeScenarioId: text("activeScenarioId"),
     cesiumIonToken: text("cesiumIonToken"),
+    keeptrackApiKey: text("keeptrackApiKey"),
     llmApiUrl: text("llmApiUrl"), llmModel: text("llmModel"), llmApiKey: text("llmApiKey"),
     yoloApiUrl: text("yoloApiUrl"), yoloModel: text("yoloModel") || "default", yoloApiKey: text("yoloApiKey"),
     providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600 ? timeout : 30,
@@ -167,6 +169,7 @@ function sharedEnvironment() {
     SAT_SIM_YOLO_MODEL: settings.yoloModel,
     SAT_SIM_YOLO_API_KEY: settings.activeAiMode === "yolo" ? settings.yoloApiKey : "",
     SAT_SIM_PROVIDER_TIMEOUT_SECONDS: String(settings.providerTimeoutSeconds),
+    SAT_SIM_KEEPTRACK_API_KEY: settings.keeptrackApiKey,
   };
 }
 
@@ -402,11 +405,16 @@ function registerIpc() {
     const saved = await saveSettings(value);
     const providerChanged = ["activeAiMode", "llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
     const connectionChanged = ["gpuMode", "jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
+    const keeptrackChanged = prior.keeptrackApiKey !== saved.keeptrackApiKey;
     if (saved.gpuMode === "jetson" && (!saved.jetsonHost || !saved.desktopAdvertiseHost)) {
       throw new Error("Jetson 模式需要填写 Jetson 地址和桌面可访问的 LAN 地址");
     }
     if (connectionChanged) {
       await stopStack(); await startStack();
+    } else if (keeptrackChanged) {
+      await stopProcess("ground");
+      startService("ground", runtime.ports.ground);
+      await waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务");
     } else if (providerChanged && saved.gpuMode === "local") {
       await stopProcess("gpu");
       startService("gpu", runtime.ports.gpu);

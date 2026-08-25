@@ -67,6 +67,10 @@ export interface SatelliteCreateRequest {
   satellite_name: string; tle_line1: string; tle_line2: string;
   ground_station_name: string; latitude: number; longitude: number; altitude_m: number;
 }
+export interface SatelliteNoradLookup {
+  norad_id: number; satellite_name: string; omm_epoch: string;
+  tle_line1: string; tle_line2: string; checked_at: string;
+}
 export interface ContactWindow {
   aos: string; los: string; max_elevation_at: string; max_elevation_deg: number;
 }

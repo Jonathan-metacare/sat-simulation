@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
 import tempfile
 import zipfile
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -36,8 +37,8 @@ from sat_simulation.common.models import (
     MissionCommand,
     MissionCreate,
     MissionDetail,
-    MissionPromptUpdate,
     MissionPhase,
+    MissionPromptUpdate,
     MissionStatus,
     MissionSummary,
     NodeArtifact,
@@ -52,9 +53,9 @@ from sat_simulation.common.models import (
     ProductManifest,
     ProtocolFrameTrace,
     ProtocolTransaction,
+    SatelliteCreateRequest,
     ScenarioConfig,
     ScenarioControl,
-    SatelliteCreateRequest,
     SceneAsset,
     TelemetryEvent,
     TransferRecord,
@@ -66,11 +67,16 @@ from sat_simulation.common.models import (
 from sat_simulation.common.orbit import orbit_track, plan_mission_windows
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
-from sat_simulation.processors.templates import builtin_template, source_from_bundle, workspace_bundle
 from sat_simulation.config import Settings, settings
+from sat_simulation.omm import extract_omm, omm_hash, omm_to_tle
 from sat_simulation.optical.pipeline import ensure_demo_scene, sha256_file
 from sat_simulation.optical.scenes import validate_and_convert_scene
 from sat_simulation.processors import ProcessorBundleError, inspect_processor_bundle
+from sat_simulation.processors.templates import (
+    builtin_template,
+    source_from_bundle,
+    workspace_bundle,
+)
 from sat_simulation.storage import Repository
 
 PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
@@ -111,6 +117,8 @@ PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
         MissionStatus.DOWNLINKING,
     ),
 }
+
+logger = logging.getLogger(__name__)
 
 
 def new_satellite_config(body: SatelliteCreateRequest) -> ScenarioConfig:
@@ -184,6 +192,75 @@ class GroundState:
         await self.ensure_default_scene()
         await self.repo.recover_running_missions()
         await self.receiver.start(self.settings.host, self.settings.ground_downlink_port)
+        # Refresh is deliberately detached from startup: cached or manual TLE input
+        # remains usable while KeepTrack is unreachable.
+        self._track_task(asyncio.create_task(self.refresh_stale_omm_cache()))
+
+    def _track_task(self, task: asyncio.Task[Any]) -> None:
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def lookup_norad(self, norad_id: int) -> dict[str, Any]:
+        if not 1 <= norad_id <= 999999:
+            raise ValueError("NORAD id must be between 1 and 999999")
+        api_key = (self.settings.keeptrack_api_key or "").strip()
+        if not api_key:
+            raise PermissionError(
+                "KeepTrack API key is not configured. Add it in Settings > Plugin & Keys."
+            )
+        url = self.settings.keeptrack_api_url.format(norad=norad_id)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(url, headers={"X-API-Key": api_key})
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise LookupError(f"NORAD {norad_id} was not found in KeepTrack") from exc
+            raise ConnectionError(
+                f"KeepTrack request failed with HTTP {exc.response.status_code}"
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ConnectionError("KeepTrack is unavailable or returned invalid JSON") from exc
+        omm = extract_omm(payload, norad_id)
+        tle_line1, tle_line2 = omm_to_tle(omm)
+        checked_at = datetime.now(UTC)
+        satellite_name = omm["OBJECT_NAME"]
+        await self.repo.upsert_latest_satellite_omm(
+            norad_id=norad_id,
+            satellite_name=satellite_name,
+            omm_epoch=omm["EPOCH"],
+            omm=omm,
+            tle_line1=tle_line1,
+            tle_line2=tle_line2,
+            content_hash=omm_hash(omm),
+            checked_at=checked_at,
+        )
+        return {
+            "norad_id": norad_id, "satellite_name": satellite_name, "omm_epoch": omm["EPOCH"],
+            "tle_line1": tle_line1, "tle_line2": tle_line2, "checked_at": checked_at,
+        }
+
+    async def refresh_stale_omm_cache(self) -> None:
+        """Check each cached NORAD at most once per UTC date, after service readiness."""
+        if not (self.settings.keeptrack_api_key or "").strip():
+            return
+        today = datetime.now(UTC).date()
+        for entry in await self.repo.cached_latest_satellite_omm():
+            checked_at = entry["last_checked_at"]
+            if checked_at.tzinfo is None:
+                # SQLite does not round-trip timezone metadata despite the column hint.
+                checked_at = checked_at.replace(tzinfo=UTC)
+            if checked_at.astimezone(UTC).date() >= today:
+                continue
+            try:
+                await self.lookup_norad(entry["norad_id"])
+            except Exception:
+                logger.warning(
+                    "KeepTrack background refresh failed for NORAD %s",
+                    entry["norad_id"],
+                    exc_info=True,
+                )
 
     async def ensure_default_scene(self) -> None:
         """Install the versioned Beijing fixture into the writable runtime data."""
@@ -1273,6 +1350,20 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         state.clocks[config.id] = clock
         await state.repo.create_scenario(config, clock.state())
         return {"config": config, "clock": clock.state()}
+
+    @app.post("/api/satellites/norad/{norad_id}")
+    async def lookup_satellite_norad(norad_id: int) -> dict[str, Any]:
+        """Fetch the current KeepTrack OMM and return its TLE representation."""
+        try:
+            return await state.lookup_norad(norad_id)
+        except PermissionError as exc:
+            raise HTTPException(412, str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except ConnectionError as exc:
+            raise HTTPException(502, str(exc)) from exc
 
     @app.get("/api/scenarios")
     async def list_scenarios() -> list[dict[str, Any]]:
