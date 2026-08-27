@@ -458,6 +458,9 @@ async function bootstrap() {
       contextIsolation: true, nodeIntegration: false, sandbox: false,
     },
   });
+  if (!app.isPackaged) {
+    mainWindow.webContents.openDevTools({ mode: "detach" });
+  }
   // This app is distributed as an unsigned DMG and may be upgraded by
   // replacing the .app bundle while keeping Electron's user-data directory.
   // Next marks hashed chunks immutable, so a cached 404 from an older bundle
@@ -471,7 +474,7 @@ async function bootstrap() {
       "typeof window.satSimDesktop",
     ).then((result) => appendLog("desktop", `[bridge] satSimDesktop=${result}\n`));
   });
-  await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>正在启动 SpaceZenith-Sim…</body>");
+  await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>Launching…</body>");
   try {
     await startStack();
     await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
