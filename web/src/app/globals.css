@@ -126,3 +126,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 /* The settings menu needs a clearly visible hover state in either theme. */
 :root[data-theme="light"] .settings-menu-item:hover { background:rgba(8,145,178,.22) !important; color:#062f40 !important; }
+
+/* Reset controls use semantic colors, so they retain contrast in both glass themes. */
+.settings-menu-item--danger { color:#fdba74; }
+.settings-menu-item--danger:hover { color:#fff7ed; background:rgba(234,88,12,.22); }
+.reset-row { border-color:rgba(251,146,60,.32); background:rgba(234,88,12,.06); color:#fed7aa; }
+.reset-row--active { border-color:rgba(251,146,60,.72); background:rgba(234,88,12,.13); }
+.reset-help { color:#fdba74; cursor:help; }
+.reset-action { border-color:rgba(251,146,60,.65); background:rgba(234,88,12,.16); color:#ffedd5; }
+.reset-action:hover:not(:disabled) { border-color:#fb923c; background:rgba(234,88,12,.28); }
+.reset-confirm { border-color:rgba(251,146,60,.26); color:#fed7aa; }
+:root[data-theme="light"] .settings-menu-item--danger { color:#9a3412 !important; }
+:root[data-theme="light"] .settings-menu-item--danger:hover { color:#431407 !important; background:rgba(234,88,12,.18) !important; }
+:root[data-theme="light"] .reset-row { border-color:rgba(194,65,12,.34); background:rgba(255,237,213,.72); color:#431407; }
+:root[data-theme="light"] .reset-row--active { border-color:rgba(194,65,12,.7); background:rgba(254,215,170,.72); }
+:root[data-theme="light"] .reset-help { color:#9a3412; }
+:root[data-theme="light"] .reset-action { border-color:rgba(194,65,12,.58); background:rgba(255,237,213,.95); color:#7c2d12; }
+:root[data-theme="light"] .reset-action:hover:not(:disabled) { border-color:#9a3412; background:#fed7aa; color:#431407; }
+:root[data-theme="light"] .reset-confirm { border-color:rgba(194,65,12,.25); color:#7c2d12; }

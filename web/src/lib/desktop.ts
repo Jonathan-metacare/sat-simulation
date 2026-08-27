@@ -29,10 +29,19 @@ export type DesktopDiagnostics = {
   services: Array<{ name: string; version: string; running: boolean }>;
 };
 
+export type DesktopResetAction = "simulation-data" | "catalog-caches" | "settings-defaults";
+
+export type DesktopResetResult = {
+  action: DesktopResetAction;
+  settings: DesktopSettings;
+  diagnostics: DesktopDiagnostics;
+};
+
 export type DesktopBridge = {
   apiBase: string;
   getSettings(): Promise<DesktopSettings>;
   saveSettings(value: DesktopSettings): Promise<DesktopSettings>;
+  resetData(action: DesktopResetAction, confirmation?: string): Promise<DesktopResetResult>;
   diagnostics(): Promise<DesktopDiagnostics>;
   restartGpu(): Promise<DesktopDiagnostics>;
   restartStack(): Promise<DesktopDiagnostics>;

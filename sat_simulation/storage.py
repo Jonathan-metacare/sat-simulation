@@ -381,6 +381,15 @@ class Repository:
                 for row in rows
             ]
 
+    async def clear_catalog_caches(self, catalog_key: str) -> None:
+        """Delete only disposable lookup catalogs, never mission or scenario data."""
+        async with self.session() as session:
+            await session.execute(delete(LatestSatelliteOMMRow))
+            await session.execute(delete(SatnogsGroundStationRow))
+            await session.execute(
+                delete(CatalogMetadataRow).where(CatalogMetadataRow.key == catalog_key)
+            )
+
     async def catalog_status(self, key: str) -> str | None:
         async with self.session() as session:
             row = await session.get(CatalogMetadataRow, key)

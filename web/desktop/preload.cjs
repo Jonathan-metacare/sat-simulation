@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("satSimDesktop", {
   apiBase: ipcRenderer.sendSync("desktop:api-base"),
   getSettings: () => ipcRenderer.invoke("desktop:settings:get"),
   saveSettings: (value) => ipcRenderer.invoke("desktop:settings:save", value),
+  resetData: (action, confirmation) => ipcRenderer.invoke("desktop:data:reset", action, confirmation),
   diagnostics: () => ipcRenderer.invoke("desktop:diagnostics"),
   restartGpu: () => ipcRenderer.invoke("desktop:gpu:restart"),
   restartStack: () => ipcRenderer.invoke("desktop:stack:restart"),

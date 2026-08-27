@@ -39,6 +39,7 @@ let runtime;
 let settings = { ...defaultSettings };
 let ipcRegistered = false;
 let isQuitting = false;
+let resetInProgress = false;
 const processes = new Map();
 // LaunchServices returns immediately for packaged service agents.  Retain the
 // exact role-and-port identity separately so they can still be stopped later
@@ -247,6 +248,25 @@ function startService(name, port) {
   );
 }
 
+function runDesktopUtility(name) {
+  const executable = serviceCommand();
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable.command, [...executable.prefix, name], {
+      cwd: projectDirectory,
+      env: sharedEnvironment(),
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.on("data", (value) => appendLog("desktop", `[${name}] ${value}`));
+    child.stderr.on("data", (value) => appendLog("desktop", `[${name}] ${value}`));
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${name} failed (code=${code ?? "null"}, signal=${signal ?? "none"})`));
+    });
+  });
+}
+
 function startWeb() {
   const environment = {
     ...sharedEnvironment(),
@@ -271,6 +291,11 @@ async function restartWeb() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
   }
+}
+
+async function loadCurrentWeb() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
 }
 
 async function waitFor(url, name, timeout = 90000) {
@@ -378,6 +403,56 @@ function diagnostics() {
   };
 }
 
+const resetActions = new Set(["simulation-data", "catalog-caches", "settings-defaults"]);
+
+async function resetLocalData(rawAction, rawConfirmation) {
+  const action = String(rawAction ?? "");
+  const confirmation = String(rawConfirmation ?? "");
+  if (!resetActions.has(action)) throw new Error("Unsupported reset action");
+  if ((action === "simulation-data" || action === "settings-defaults") && confirmation !== "RESET") {
+    throw new Error("Type RESET to confirm this reset");
+  }
+  if (resetInProgress) throw new Error("A data reset is already in progress");
+
+  resetInProgress = true;
+  let actionError;
+  try {
+    await stopStack();
+    const locations = runtimeDirectories();
+    if (action === "simulation-data") {
+      // `root` is derived solely from Electron's userData directory.  Never
+      // accept a path from IPC, even for this user-authorized permanent reset.
+      await fsp.rm(locations.root, { recursive: true, force: true });
+      await saveSettings({ ...settings, activeScenarioId: defaultSettings.activeScenarioId });
+    } else if (action === "catalog-caches") {
+      await runDesktopUtility("reset-catalog-caches");
+    } else {
+      await fsp.rm(locations.settings, { force: true });
+      settings = { ...defaultSettings };
+    }
+  } catch (error) {
+    actionError = error;
+  }
+
+  try {
+    await startStack();
+    // A full stack restart allocates new localhost ports.  The existing
+    // renderer otherwise keeps polling the now-closed Ground port.
+    await loadCurrentWeb();
+  } catch (restartError) {
+    const detail = restartError instanceof Error ? restartError.message : String(restartError);
+    if (actionError) {
+      const original = actionError instanceof Error ? actionError.message : String(actionError);
+      throw new Error(`${original}; service restart also failed: ${detail}. Logs: ${runtimeDirectories().logs}`);
+    }
+    throw new Error(`Reset completed but services could not restart: ${detail}. Logs: ${runtimeDirectories().logs}`);
+  } finally {
+    resetInProgress = false;
+  }
+  if (actionError) throw actionError;
+  return { action, settings, diagnostics: diagnostics() };
+}
+
 function registerExternalHandler() {
   // This is deliberately replaced on every bootstrap: it allows a reopened
   // macOS window to use the current preload bridge even after dev reloads.
@@ -400,6 +475,7 @@ function registerIpc() {
   ipcRegistered = true;
   ipcMain.on("desktop:api-base", (event) => { event.returnValue = runtime?.apiBase ?? "http://127.0.0.1:8000/api"; });
   ipcMain.handle("desktop:settings:get", () => settings);
+  ipcMain.handle("desktop:data:reset", async (_event, action, confirmation) => resetLocalData(action, confirmation));
   ipcMain.handle("desktop:settings:save", async (_event, value) => {
     const prior = settings;
     const saved = await saveSettings(value);
@@ -410,7 +486,7 @@ function registerIpc() {
       throw new Error("Jetson 模式需要填写 Jetson 地址和桌面可访问的 LAN 地址");
     }
     if (connectionChanged) {
-      await stopStack(); await startStack();
+      await stopStack(); await startStack(); await loadCurrentWeb();
     } else if (keeptrackChanged) {
       await stopProcess("ground");
       startService("ground", runtime.ports.ground);
@@ -433,7 +509,7 @@ function registerIpc() {
     await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
     return diagnostics();
   });
-  ipcMain.handle("desktop:stack:restart", async () => { await stopStack(); await startStack(); return diagnostics(); });
+  ipcMain.handle("desktop:stack:restart", async () => { await stopStack(); await startStack(); await loadCurrentWeb(); return diagnostics(); });
   ipcMain.handle("desktop:open-data-directory", () => shell.openPath(runtimeDirectories().root));
   ipcMain.handle("desktop:open-log-directory", () => shell.openPath(runtimeDirectories().logs));
 }
@@ -466,8 +542,8 @@ async function bootstrap() {
   // Next marks hashed chunks immutable, so a cached 404 from an older bundle
   // can otherwise prevent dynamic Cesium chunks from ever loading.
   await mainWindow.webContents.session.clearCache();
-  mainWindow.webContents.on("console-message", (_event, _level, message) => {
-    appendLog("desktop", `[renderer] ${message}\n`);
+  mainWindow.webContents.on("console-message", (_event, details) => {
+    appendLog("desktop", `[renderer] ${details.message}\n`);
   });
   mainWindow.webContents.on("did-finish-load", () => {
     void mainWindow.webContents.executeJavaScript(
@@ -477,7 +553,7 @@ async function bootstrap() {
   await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>Launching…</body>");
   try {
     await startStack();
-    await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
+    await loadCurrentWeb();
   } catch (error) {
     appendLog("desktop", `[startup failed] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
     await stopStack();

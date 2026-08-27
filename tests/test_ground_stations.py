@@ -85,3 +85,25 @@ async def test_search_reports_initializing_before_catalog_is_ready(tmp_path) -> 
     await state.repo.init()
     assert await state.search_ground_stations("beijing") == {"status": "initializing", "results": []}
     await state.repo.close()
+
+
+@pytest.mark.asyncio
+async def test_clear_catalog_caches_preserves_other_database_data(tmp_path) -> None:
+    state = GroundState(Settings(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'stations.db'}", data_dir=tmp_path,
+    ))
+    await state.repo.init()
+    await state.repo.upsert_satnogs_ground_stations([normalize_satnogs_station(station(3, "Cached Station"))])
+    await state.repo.set_catalog_status("satnogs_ground_stations_v1", "complete")
+    await state.repo.upsert_latest_satellite_omm(
+        norad_id=25544, satellite_name="ISS", omm_epoch="2026-01-01T00:00:00Z",
+        omm={"OBJECT_NAME": "ISS"}, tle_line1="1" * 69, tle_line2="2" * 69,
+        content_hash="a" * 64,
+    )
+
+    await state.repo.clear_catalog_caches("satnogs_ground_stations_v1")
+
+    assert await state.repo.cached_latest_satellite_omm() == []
+    assert await state.repo.catalog_status("satnogs_ground_stations_v1") is None
+    assert await state.repo.search_satnogs_ground_stations("cached") == []
+    await state.repo.close()

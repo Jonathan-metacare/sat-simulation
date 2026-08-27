@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LoaderCircle, Settings2, X } from "lucide-react";
+import { CircleAlert, LoaderCircle, Settings2, X } from "lucide-react";
 
-import { desktopBridge, type DesktopSettings } from "~/lib/desktop";
+import { desktopBridge, type DesktopResetAction, type DesktopSettings } from "~/lib/desktop";
 import { api } from "~/lib/api";
 import { translate } from "~/lib/i18n";
 import type { ScenarioRecord } from "~/lib/types";
@@ -31,7 +31,7 @@ function Field({ label, value, onChange, type = "text", placeholder }: {
 
 export function isDesktopApp() { return Boolean(desktopBridge()); }
 
-type SettingsSection = "general" | "plugins" | "ai" | "scene" | "about";
+type SettingsSection = "general" | "plugins" | "ai" | "scene" | "data" | "about";
 
 function sectionTitle(section: SettingsSection, t: (key: Parameters<typeof translate>[1]) => string) {
   return ({
@@ -39,6 +39,7 @@ function sectionTitle(section: SettingsSection, t: (key: Parameters<typeof trans
     plugins: t("sidebar.plugins"),
     ai: "AI",
     scene: t("sidebar.scene"),
+    data: t("sidebar.data"),
     about: t("sidebar.about"),
   })[section];
 }
@@ -54,6 +55,9 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
   const [sceneNotice, setSceneNotice] = useState<string>();
   const [scenarios, setScenarios] = useState<ScenarioRecord[]>([]);
   const [visionModels, setVisionModels] = useState<Array<{ name: string; capabilities: string[] }>>([]);
+  const [pendingReset, setPendingReset] = useState<DesktopResetAction>();
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [resetNotice, setResetNotice] = useState<string>();
 
   useEffect(() => {
     if (!open || !bridge) return;
@@ -61,7 +65,10 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
       setValue({ ...saved, activeScenarioId: saved.activeScenarioId || activeScenarioId || "scenario-demo-beijing" }); setScenarios(records); setError(undefined);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, [activeScenarioId, bridge, open]);
-  useEffect(() => { if (open) setSection(initialSection); }, [initialSection, open]);
+  useEffect(() => {
+    if (!open) return;
+    setSection(initialSection); setPendingReset(undefined); setResetConfirmation(""); setResetNotice(undefined);
+  }, [initialSection, open]);
   useEffect(() => {
     if (!open || section !== "ai" || value.gpuMode !== "jetson") return;
     void api.providerModels().then((result) => setVisionModels(result.models)).catch(() => setVisionModels([]));
@@ -69,11 +76,11 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
   useEffect(() => {
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !working) onClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose, open]);
+  }, [onClose, open, working]);
 
   if (!open) return null;
   if (!bridge) return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"><section className="panel w-full max-w-md rounded-2xl p-5"><div className="flex items-center justify-between"><h2 className="text-lg text-cyan-100">{t("sidebar.settings")}</h2><button onClick={onClose}><X size={18} /></button></div><p className="mt-4 text-sm leading-6 text-slate-400">{t("settings.desktopOnly")}</p></section></div>;
@@ -96,11 +103,28 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setWorking(false); }
   };
+  const needsResetToken = pendingReset === "simulation-data" || pendingReset === "settings-defaults";
+  const runReset = async () => {
+    if (!pendingReset) return;
+    setWorking(true); setError(undefined); setResetNotice(undefined);
+    try {
+      const result = await bridge.resetData(pendingReset, resetConfirmation);
+      setValue(result.settings); onLocale(result.settings.locale); onTheme(result.settings.theme); onAiMode(result.settings.activeAiMode);
+      setPendingReset(undefined); setResetConfirmation("");
+      setResetNotice(t("settings.resetCompleted"));
+      onSettingsSaved?.();
+      if (pendingReset === "simulation-data") {
+        const records = await api.scenarios();
+        setScenarios(records);
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setWorking(false); }
+  };
   return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
     <section className="panel max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-5 shadow-2xl shadow-black/60">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div><h2 className="flex items-center gap-2 text-lg font-medium text-cyan-100"><Settings2 size={18} />{sectionTitle(section, t)}</h2><p className="mt-1 text-xs leading-5 text-slate-500">{t("settings.localOnly")}</p></div>
-        <button onClick={onClose} className="rounded-lg border border-white/10 p-2 text-slate-400 hover:text-cyan-100"><X size={16} /></button>
+        <button disabled={working} onClick={onClose} className="rounded-lg border border-white/10 p-2 text-slate-400 hover:text-cyan-100 disabled:opacity-40"><X size={16} /></button>
       </div>
       {section === "general" && <div className="grid gap-4 sm:grid-cols-2">
         <label className="text-xs text-slate-400">{t("settings.language")}<select value={value.locale} onChange={(event) => update("locale", event.target.value as Locale)} className="mt-1.5 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-100"><option value="zh">{t("settings.chinese")}</option><option value="en">{t("settings.english")}</option></select></label>
@@ -123,11 +147,13 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
       </div>}
       {section === "ai" && <div className="mt-4 rounded-xl border border-white/[.07] bg-black/20 p-3 text-xs text-slate-400"><div className="text-cyan-200">{t("settings.activeSelection")}</div><div className="mt-2">{value.activeAiMode === "yolo" ? "YOLO" : "LLM"} · {t("settings.subsequentMode")}</div></div>}
       {section === "scene" && <div className="space-y-4"><p className="text-xs leading-5 text-slate-500">{t("settings.sceneDescription")}</p><label className="block text-xs text-slate-400">{t("settings.activeScenario")}<select value={value.activeScenarioId} disabled={working} onChange={(event) => { const selected = scenarios.find((item) => item.config.id === event.target.value); if (!selected) return; setWorking(true); setError(undefined); void Promise.resolve(onScenarioSelected?.(selected)).then(() => update("activeScenarioId", selected.config.id)).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setWorking(false)); }} className="mt-1.5 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-100">{scenarios.map((item) => <option key={item.config.id} value={item.config.id} disabled={!item.config.scene_ready}>{item.config.name}{item.config.scene_ready ? "" : ` (${t("settings.geoTiffRequired")})`}</option>)}</select></label><div className="border-t border-white/[.07] pt-4"><label className="block text-xs text-slate-400">YAML<input className="mt-1.5 block w-full text-xs" type="file" accept=".yaml,.yml" onChange={(event) => setYamlFile(event.target.files?.[0])} /></label><button disabled={!yamlFile || working} onClick={() => void importYaml()} className="mt-2 rounded-lg border border-cyan-300/50 px-3 py-2 text-xs text-cyan-100">{t("settings.importYaml")}</button></div>{sceneNotice && <p className="text-xs text-emerald-300">{sceneNotice}</p>}</div>}
+      {section === "data" && <div className="w-full space-y-2 md:w-1/2">{(["simulation-data", "catalog-caches", "settings-defaults"] as DesktopResetAction[]).map((action) => <div key={action} className={`reset-row rounded-xl border px-3 py-2.5 ${pendingReset === action ? "reset-row--active" : ""}`}><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><h3 className="truncate text-sm font-medium">{t(`settings.reset.${action}.title`)}</h3><span tabIndex={0} role="img" aria-label={t(`settings.reset.${action}.tooltip`)} title={t(`settings.reset.${action}.tooltip`)} className="reset-help shrink-0"><CircleAlert size={16} /></span></div><button disabled={working} onClick={() => { setPendingReset(action); setResetConfirmation(""); setError(undefined); setResetNotice(undefined); }} className="reset-action rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-50">{t("settings.resetAction")}</button></div>{pendingReset === action && <div className="reset-confirm mt-3 border-t pt-3"><p className="text-xs leading-5">{t(needsResetToken ? "settings.resetType" : "settings.resetConfirm")}</p>{needsResetToken && <input autoFocus value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} placeholder="RESET" className="mt-2 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-orange-300/50" />}<div className="mt-3 flex gap-2"><button disabled={working || (needsResetToken && resetConfirmation !== "RESET")} onClick={() => void runReset()} className="reset-action inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium disabled:opacity-50">{working && <LoaderCircle size={14} className="animate-spin" />}{t("settings.resetConfirmButton")}</button><button disabled={working} onClick={() => { setPendingReset(undefined); setResetConfirmation(""); }} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300">{t("settings.resetCancel")}</button></div></div>}</div>)}</div>}
       {section === "about" && <div className="rounded-xl border border-white/[.07] bg-black/20 p-4 text-sm text-slate-300"><div className="text-cyan-200">{t("settings.softwareVersion")}</div><div className="mt-3 font-mono text-lg text-cyan-100">SIL ONLINE · v0.1.1</div><div className="mt-5 text-cyan-200">{t("settings.publisher")}</div><a href="https://www.spacezenith.ai" target="_blank" rel="noreferrer" onClick={(event) => { if (typeof bridge?.openExternal !== "function") return; event.preventDefault(); void bridge.openExternal("https://www.spacezenith.ai").catch(() => window.open("https://www.spacezenith.ai", "_blank", "noopener,noreferrer")); }} className="mt-2 inline-block text-left text-sm text-cyan-100 underline decoration-cyan-300/40 underline-offset-4 hover:text-cyan-300">www.spacezenith.ai</a></div>}
       {error && <p className="mt-4 rounded-lg border border-orange-300/25 bg-orange-300/10 px-3 py-2 text-xs text-orange-200">{error}</p>}
-      <div className="mt-5 flex flex-wrap justify-end gap-2">
+      {resetNotice && <p className="mt-4 rounded-lg border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-xs text-emerald-200">{resetNotice}</p>}
+      {section !== "data" && <div className="mt-5 flex flex-wrap justify-end gap-2">
         <button disabled={working} onClick={() => void save()} className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-300/50 bg-cyan-300/15 px-3 py-2 text-xs text-cyan-100 disabled:opacity-50">{working && <LoaderCircle size={14} className="animate-spin" />}{t("settings.save")}</button>
-      </div>
+      </div>}
     </section>
   </div>;
 }

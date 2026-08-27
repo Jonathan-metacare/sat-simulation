@@ -7,7 +7,10 @@ import argparse
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Satellite SIL desktop service")
-    parser.add_argument("service", choices=("ground", "platform", "optical", "gpu", "processor-worker"))
+    parser.add_argument(
+        "service",
+        choices=("ground", "platform", "optical", "gpu", "processor-worker", "reset-catalog-caches"),
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
     parser.add_argument("--entrypoint")
@@ -16,6 +19,29 @@ def main() -> None:
     parser.add_argument("--cpu-seconds", type=int)
     parser.add_argument("--memory-mb", type=int)
     arguments = parser.parse_args()
+
+    if arguments.service == "reset-catalog-caches":
+        # This one-off command is launched only by Electron after all local
+        # services have stopped.  It deliberately has no user-controlled path
+        # or table arguments, so a renderer can never turn it into a database
+        # shell.
+        import asyncio
+
+        from sat_simulation.config import settings
+        from sat_simulation.storage import Repository
+
+        satnogs_catalog_key = "satnogs_ground_stations_v1"
+
+        async def clear() -> None:
+            repo = Repository(settings.database_url)
+            try:
+                await repo.init()
+                await repo.clear_catalog_caches(satnogs_catalog_key)
+            finally:
+                await repo.close()
+
+        asyncio.run(clear())
+        return
 
     if arguments.service == "processor-worker":
         from sat_simulation.processors.worker import main as worker_main
