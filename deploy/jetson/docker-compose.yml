@@ -1,6 +1,6 @@
 services:
   gpu-api:
-    image: ${SAT_SIM_GPU_API_IMAGE:-spacezenith/sim-gpu-api:0.1.1}
+    image: ${SAT_SIM_GPU_API_IMAGE:-spacezenith/sim-gpu-api:0.1.2}
     container_name: spacezenith-gpu-api
     restart: unless-stopped
     network_mode: host

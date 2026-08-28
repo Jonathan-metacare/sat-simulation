@@ -10,10 +10,10 @@ GPU Payload 的仿真数据。项目只以完整 App 交付；不再支持前后
 桌面版首次启动会自动创建本地 SQLite 数据和示例场景。通过顶部的 **New Sat** 创建
 卫星、地面站与观测场景；也可在 Settings → Scene 中导入完整 YAML 场景。
 
-- 默认 **Local GPU**：Ground、Platform、Optical、GPU 和界面均由 App 在本机启动。
-- 可选 **Jetson GPU**：Mac 保留 Ground、Platform、Optical 与界面；Jetson 执行 L1
-  处理（L1A/L1B/STAC）、自定义 L1 Docker 沙箱和 Ollama 视觉分析。Jetson 离线或
-  版本不一致时任务 L1/AI 阶段明确阻塞，不会回退至 Mac。
+- 默认 **Jetson GPU**：Mac 保留 Ground、Platform、Optical 与界面；Jetson 执行 L1
+ 处理（L1A/L1B/STAC）、自定义 L1 Docker 沙箱和 Ollama 视觉分析。Jetson 离线或
+ 版本不一致时任务 L1/AI 阶段明确阻塞，不会回退至 Mac。
+- **Local GPU** 仅在开发者模式中提供，用于本机开发、演示和排障，不是正式用户路径。
 
 详细使用、开发和打包方式见 [桌面版指南](docs/DESKTOP.md)。Jetson 部署方式见
 [Jetson GPU Payload](deploy/jetson/README.md)。
@@ -29,8 +29,9 @@ pnpm install
 pnpm desktop:dist
 ```
 
-macOS Apple Silicon DMG 输出到 `web/release/`。Windows 安装包必须在 Windows x64
-本机生成：`pnpm desktop:dist:win`。
+macOS Apple Silicon DMG 输出到 `web/release/`。它会构建并内置同版本 Jetson
+ARM64 离线 payload，因此比纯桌面 App 约增加 380–400 MB。首版仅支持该 macOS
+交付路径；Windows 安装包不内置 Jetson payload。
 
 开发时可运行：
 

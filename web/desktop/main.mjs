@@ -6,6 +6,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deployJetson, discoverJetsonHostKey, preflightJetson } from "./jetson-deployment.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const webDirectory = path.resolve(directory, "..");
@@ -26,8 +27,14 @@ const defaultSettings = {
   yoloModel: "default",
   yoloApiKey: "",
   providerTimeoutSeconds: 30,
-  gpuMode: "local",
+  gpuMode: "jetson",
   jetsonHost: "",
+  jetsonSshUsername: "",
+  jetsonSshPassword: "",
+  jetsonHostKeyFingerprint: "",
+  jetsonDeploymentStatus: "unconfigured",
+  jetsonDeploymentVersion: "",
+  jetsonDeploymentError: "",
   jetsonApiPort: 8002,
   jetsonGtxPort: 9101,
   desktopAdvertiseHost: "",
@@ -40,6 +47,7 @@ let settings = { ...defaultSettings };
 let ipcRegistered = false;
 let isQuitting = false;
 let resetInProgress = false;
+let jetsonDeploymentInProgress = false;
 const processes = new Map();
 // LaunchServices returns immediately for packaged service agents.  Retain the
 // exact role-and-port identity separately so they can still be stopped later
@@ -62,7 +70,7 @@ async function loadSettings() {
   await fsp.mkdir(path.dirname(locations.settings), { recursive: true });
   try {
     const loaded = JSON.parse(await fsp.readFile(locations.settings, "utf8"));
-    settings = { ...defaultSettings, ...loaded };
+    settings = cleanSettings({ ...defaultSettings, ...loaded });
   } catch (error) {
     if (error.code !== "ENOENT") console.warn("Could not read desktop settings", error);
   }
@@ -85,13 +93,47 @@ function cleanSettings(value) {
     llmApiUrl: text("llmApiUrl"), llmModel: text("llmModel"), llmApiKey: text("llmApiKey"),
     yoloApiUrl: text("yoloApiUrl"), yoloModel: text("yoloModel") || "default", yoloApiKey: text("yoloApiKey"),
     providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600 ? timeout : 30,
-    gpuMode: value?.gpuMode === "jetson" ? "jetson" : "local",
+    gpuMode: value?.gpuMode === "local" && localGpuAllowed() ? "local" : "jetson",
     jetsonHost: text("jetsonHost"),
+    jetsonSshUsername: text("jetsonSshUsername"),
+    jetsonSshPassword: text("jetsonSshPassword"),
+    jetsonHostKeyFingerprint: text("jetsonHostKeyFingerprint"),
+    jetsonDeploymentStatus: ["unconfigured", "pending", "deploying", "ready", "failed"].includes(value?.jetsonDeploymentStatus) ? value.jetsonDeploymentStatus : "unconfigured",
+    jetsonDeploymentVersion: text("jetsonDeploymentVersion"),
+    jetsonDeploymentError: text("jetsonDeploymentError"),
     jetsonApiPort: port("jetsonApiPort", 8002),
     jetsonGtxPort: port("jetsonGtxPort", 9101),
     desktopAdvertiseHost: text("desktopAdvertiseHost"),
     platformGtxResultPort: port("platformGtxResultPort", 9102),
   };
+}
+
+function localGpuAllowed() {
+  return !app.isPackaged || process.env.SAT_SIM_DEVELOPER_MODE === "1";
+}
+
+function bundledJetsonPayload(version) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "jetson-payload")
+    : path.join(projectDirectory, "release", `jetson-${version}-linux-arm64`);
+}
+
+function jetsonConnection(credentials) {
+  if (!settings.jetsonHost || !settings.jetsonSshUsername) throw new Error("Save Jetson host and SSH username first");
+  const password = typeof credentials?.password === "string" && credentials.password
+    ? credentials.password
+    : settings.jetsonSshPassword;
+  if (!password) throw new Error("Save a Jetson SSH password first");
+  return {
+    host: settings.jetsonHost,
+    username: settings.jetsonSshUsername,
+    password,
+    expectedFingerprint: settings.jetsonHostKeyFingerprint || undefined,
+  };
+}
+
+function sendJetsonProgress(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("desktop:jetson:progress", payload);
 }
 
 async function saveSettings(value) {
@@ -293,9 +335,9 @@ async function restartWeb() {
   }
 }
 
-async function loadCurrentWeb() {
+async function loadCurrentWeb(query = "") {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
+  await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}${query}`);
 }
 
 async function waitFor(url, name, timeout = 90000) {
@@ -475,18 +517,63 @@ function registerIpc() {
   ipcRegistered = true;
   ipcMain.on("desktop:api-base", (event) => { event.returnValue = runtime?.apiBase ?? "http://127.0.0.1:8000/api"; });
   ipcMain.handle("desktop:settings:get", () => settings);
+  ipcMain.handle("desktop:capabilities", () => ({ localGpuAllowed: localGpuAllowed() }));
+  ipcMain.handle("desktop:jetson:discover-host-key", async (_event, credentials) => {
+    const connection = jetsonConnection(credentials);
+    return { fingerprint: await discoverJetsonHostKey(connection) };
+  });
+  ipcMain.handle("desktop:jetson:confirm-host-key", async (_event, fingerprint) => {
+    if (!/^SHA256:[A-Za-z0-9+/=]+$/.test(String(fingerprint))) throw new Error("Invalid Jetson host key fingerprint");
+    await saveSettings({ ...settings, jetsonHostKeyFingerprint: String(fingerprint), jetsonDeploymentStatus: "pending", jetsonDeploymentError: "" });
+    return settings;
+  });
+  ipcMain.handle("desktop:jetson:preflight", async (_event, credentials) => {
+    const connection = jetsonConnection(credentials);
+    if (!connection.expectedFingerprint) throw new Error("Confirm the Jetson host key before running preflight");
+    return preflightJetson(connection, (message) => sendJetsonProgress({ type: "log", message }));
+  });
+  ipcMain.handle("desktop:jetson:deploy", async (_event, request) => {
+    if (jetsonDeploymentInProgress) throw new Error("A Jetson deployment is already running");
+    const connection = jetsonConnection(request?.credentials);
+    if (!connection.expectedFingerprint) throw new Error("Confirm the Jetson host key before deployment");
+    if (!["application", "initialize"].includes(request?.mode)) throw new Error("Unsupported Jetson deployment mode");
+    jetsonDeploymentInProgress = true;
+    await saveSettings({ ...settings, jetsonDeploymentStatus: "deploying", jetsonDeploymentError: "" });
+    try {
+      const result = await deployJetson({
+        connection, version: app.getVersion(), mode: request.mode,
+        model: settings.llmModel, timeoutSeconds: settings.providerTimeoutSeconds,
+        callbackHost: settings.desktopAdvertiseHost, callbackPort: settings.platformGtxResultPort,
+        payloadPath: bundledJetsonPayload(app.getVersion()),
+      }, sendJetsonProgress);
+      await saveSettings({ ...settings, jetsonDeploymentStatus: "ready", jetsonDeploymentVersion: result.version, jetsonDeploymentError: "" });
+      return settings;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await saveSettings({ ...settings, jetsonDeploymentStatus: "failed", jetsonDeploymentError: message });
+      sendJetsonProgress({ type: "error", message });
+      throw error;
+    } finally { jetsonDeploymentInProgress = false; }
+  });
   ipcMain.handle("desktop:data:reset", async (_event, action, confirmation) => resetLocalData(action, confirmation));
   ipcMain.handle("desktop:settings:save", async (_event, value) => {
     const prior = settings;
-    const saved = await saveSettings(value);
+    let saved = await saveSettings(value);
     const providerChanged = ["activeAiMode", "llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
     const connectionChanged = ["gpuMode", "jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
+    const hostIdentityChanged = prior.jetsonHost !== saved.jetsonHost || prior.jetsonSshUsername !== saved.jetsonSshUsername;
     const keeptrackChanged = prior.keeptrackApiKey !== saved.keeptrackApiKey;
     if (saved.gpuMode === "jetson" && (!saved.jetsonHost || !saved.desktopAdvertiseHost)) {
       throw new Error("Jetson 模式需要填写 Jetson 地址和桌面可访问的 LAN 地址");
     }
+    if (saved.gpuMode === "jetson" && connectionChanged) {
+      saved = await saveSettings({
+        ...saved, jetsonDeploymentStatus: "pending", jetsonDeploymentError: "",
+        jetsonHostKeyFingerprint: hostIdentityChanged ? "" : saved.jetsonHostKeyFingerprint,
+      });
+    }
     if (connectionChanged) {
-      await stopStack(); await startStack(); await loadCurrentWeb();
+      await stopStack(); await startStack(); await loadCurrentWeb(saved.gpuMode === "jetson" ? "?jetsonDeployment=1" : "");
     } else if (keeptrackChanged) {
       await stopProcess("ground");
       startService("ground", runtime.ports.ground);

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sat-simulation"
-version = "0.1.1"
+version = "0.1.2"
 description = "Satellite onboard AI software-in-the-loop digital twin"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

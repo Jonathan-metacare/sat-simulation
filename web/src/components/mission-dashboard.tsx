@@ -106,6 +106,12 @@ export function MissionDashboard() {
   const missionId = mission?.command.id;
   const runId = mission?.command.run_id;
   const activeScenarioId = scenario?.config.id;
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("jetsonDeployment") !== "1") return;
+    setSettingsSection("ai");
+    setDesktopSettingsOpen(true);
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
   const viewedScenario = useMemo(() => mission
     ? scenarioRecords.find((item) => item.config.id === mission.command.scenario_id) ?? scenario
     : scenario, [mission, scenario, scenarioRecords]);

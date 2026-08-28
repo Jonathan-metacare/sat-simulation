@@ -635,6 +635,11 @@ class PlatformState:
                                 "ai_mode": command.ai_mode,
                                 "ai_model": command.ai_model,
                                 "options": {
+                                    # The desktop-selected timeout is part of
+                                    # the mission contract, not a hidden
+                                    # default inside a long-running Jetson
+                                    # container.
+                                    "provider_timeout_seconds": self.settings.provider_timeout_seconds,
                                     "project_context": command.project_context,
                                     "analysis_prompt": command.analysis_prompt,
                                     "mission_name": command.name,

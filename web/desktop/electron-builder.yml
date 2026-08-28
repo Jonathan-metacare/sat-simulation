@@ -7,6 +7,7 @@ directories:
   buildResources: desktop/build
 files:
   - desktop/main.mjs
+  - desktop/jetson-deployment.mjs
   - desktop/preload.cjs
   - package.json
   - "!node_modules/.cache/**"

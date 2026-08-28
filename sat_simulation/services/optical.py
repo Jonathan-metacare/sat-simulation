@@ -196,10 +196,11 @@ class OpticalState:
             raise ValueError("optical payload has no RAW for mission")
         raw_manifest = ProductManifest.model_validate(job["products"][ProductLevel.RAW])
         raw_path = Path(str(raw_manifest.artifact_path))
-        if (
-            command.l0_processor_id == "builtin-l0"
-            and self.settings.oci_runtime != "desktop-sandbox"
-        ):
+        # The built-in processor is application-owned code, not a user
+        # processor bundle.  It must stay available in a packaged desktop app
+        # even when macOS Seatbelt cannot be nested on the customer's host.
+        # Only uploaded/custom processors go through ProcessorRunner.
+        if command.l0_processor_id == "builtin-l0":
             manifest, l0_path = await asyncio.to_thread(
                 pipeline.process_l0_from_raw,
                 raw_path=raw_path,
@@ -222,7 +223,9 @@ class OpticalState:
                 processor_id=command.l0_processor_id,
                 stage=ProcessorStage.L0,
                 runtime_type=self.settings.oci_runtime,
-                sandbox_profile_version=("seatbelt-v1" if self.settings.oci_runtime == "desktop-sandbox" else None),
+                sandbox_profile_version=(
+                    "seatbelt-v1" if self.settings.oci_runtime == "desktop-sandbox" else None
+                ),
                 input_summary={"raw_sha256": raw_manifest.sha256, "shape": shape},
                 resource_limits={
                     "runtime": self.settings.oci_runtime,

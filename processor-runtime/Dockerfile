@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Pin the same Debian variant as the GPU API image.  Besides making the
+# processor runtime reproducible, this lets an offline-payload rebuild reuse
+# the already cached base image instead of resolving a moving Docker tag.
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

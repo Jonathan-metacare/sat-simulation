@@ -541,7 +541,18 @@ class GPUState:
                 provider = OpenAICompatibleLanguageProvider(
                     self.settings.llm_api_url,
                     model=selected_model,
-                    timeout=self.settings.provider_timeout_seconds,
+                    timeout=max(
+                        1.0,
+                        min(
+                            600.0,
+                            float(
+                                dict(request.get("options") or {}).get(
+                                    "provider_timeout_seconds",
+                                    self.settings.provider_timeout_seconds,
+                                )
+                            ),
+                        ),
+                    ),
                     api_key=self.settings.llm_api_key,
                 )
                 model_result = await provider.analyze(

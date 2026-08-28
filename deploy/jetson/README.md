@@ -17,8 +17,32 @@ Docker Desktop must be running. Build a Linux ARM64 offline bundle:
 ```
 
 The bundle is written to `release/jetson-<version>-linux-arm64/` and contains
-both images, Compose configuration, runtime environment file, checksum and the
-Jetson import script. Copy this entire directory to Jetson.
+both images, Compose configuration, runtime environment file, payload metadata,
+a complete checksum manifest and the Jetson import script. It can be used for
+manual air-gapped deployment or embedded into the macOS desktop DMG.
+
+## Desktop offline deployment
+
+The macOS Apple Silicon production DMG embeds the matching ARM64 offline bundle.
+In **Settings → AI → Jetson GPU**, the deployment wizard uploads the bundle,
+checks every SHA-256 digest on Jetson, imports the images with `docker load`,
+starts the GPU API and verifies the GTX callback. No registry address, Docker
+login or Jetson image download is used. The DMG increases by roughly 380–400 MB.
+
+Docker, Compose and Ollama remain Jetson host dependencies. **Initialize +
+deploy** may install them from the network; Ollama models are also not embedded
+and are downloaded when first selected.
+
+## Publish ARM64 images to Aliyun Container Registry
+
+Publish the GPU API and its matching L1 processor runtime together:
+
+```bash
+./deploy/jetson/publish-images.sh 0.1.2 spacezenith-sim-gpu-api spacezenith-processor-python
+```
+
+The two optional names become the image names below `deepagent/`. This is an
+internal publishing tool and is not used by the customer desktop deployment.
 
 ## Import and run on Jetson
 
@@ -28,8 +52,8 @@ host-managed Ollama. It does not need a project checkout, Python, a venv, a
 
 1. Install and start Ollama, then pull the configured vision model, for example
    `ollama pull qwen3-vl:8b`. Do not expose Ollama to the LAN.
-2. In the transferred bundle, edit `spacezenith-gpu.env` if the model, image tag
-   or timeout needs changing.
+2. In the transferred bundle, edit `spacezenith-gpu.env` if the model or timeout
+   needs changing.
 3. Run `./import-run.sh`. It imports both ARM64 images, creates
    `/var/lib/spacezenith-sim`, force-recreates `gpu-api` with restart policy,
    then waits for `http://127.0.0.1:8002/health` to be ready (30 one-second
@@ -45,5 +69,5 @@ Firewall policy: allow Jetson `8002/tcp` and `9101/tcp` only from the Mac LAN
 address; allow Mac `9102/tcp` only from the Jetson. Do not expose either port to
 the public internet. The desktop App and GPU API image versions must match.
 
-`install.sh` and `spacezenith-gpu.service` remain only for migration reference;
-new deployments use the offline Docker bundle.
+`install.sh` and `spacezenith-gpu.service` remain only for migration reference.
+New normal deployments use the DMG's embedded offline payload.
