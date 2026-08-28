@@ -36,9 +36,6 @@ class Settings(BaseSettings):
     oci_runtime: str = "docker"
     processor_image: str = "spacezenith/processor-python:3.12"
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
-    yolo_api_url: str | None = None
-    yolo_model: str = "default"
-    yolo_api_key: str | None = None
     llm_api_url: str | None = None
     llm_model: str = "gpt-4.1-mini"
     llm_api_key: str | None = None

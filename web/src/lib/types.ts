@@ -8,7 +8,8 @@ export type MissionPhase =
   | "processing_complete" | "gtx_complete" | "ai_complete" | "completed";
 export type ExecutionState =
   | "waiting" | "running" | "blocked" | "retryable_error" | "completed" | "cancelled";
-export type AIMode = "yolo" | "llm";
+/** `yolo` is returned only for read-only missions created before LLM-only mode. */
+export type AIMode = "llm" | "yolo";
 export type NodeKind = "ground" | "platform" | "optical" | "gpu";
 export type ProtocolLinkKind = "uplink" | "downlink" | "gtx" | "payload_bus";
 export type ProcessorStage = "l0" | "l1";
@@ -173,7 +174,7 @@ export interface MissionResultResponse {
   products: ProductManifest[];
 }
 export interface PublicConfig {
-  version: string; ai: { detection: string; language: string };
+  version: string; ai: { language: string };
   links: Record<string, { bandwidth_bps: number; latency_ms: number; frame_payload_bytes: number }>;
 }
 export interface OrbitSample {

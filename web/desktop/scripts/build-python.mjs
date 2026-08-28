@@ -32,12 +32,11 @@ const result = spawnSync(
     // SQLAlchemy loads the selected async dialect at runtime.  Include the
     // desktop default explicitly so a frozen Ground service can open SQLite.
     "--collect-all", "aiosqlite",
-    // The three applications are selected from a command-line argument, so
+    // The local applications are selected from a command-line argument, so
     // keep their conditional imports explicit in the frozen executable.
     "--hidden-import", "sat_simulation.services.ground",
     "--hidden-import", "sat_simulation.services.platform",
     "--hidden-import", "sat_simulation.services.optical",
-    "--hidden-import", "sat_simulation.services.gpu",
     "--hidden-import", "sat_simulation.processors.worker",
     path.join(projectDirectory, "desktop", "python_service.py"),
   ],

@@ -332,6 +332,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/satellites/norad/{norad_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lookup Satellite Norad
+         * @description Fetch the current KeepTrack OMM and return its TLE representation.
+         */
+        post: operations["lookup_satellite_norad_api_satellites_norad__norad_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ground-stations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Ground Stations
+         * @description Search the initialized local SatNOGS directory; never performs a live lookup.
+         */
+        get: operations["search_ground_stations_api_ground_stations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenarios/{scenario_id}/orbit": {
         parameters: {
             query?: never;
@@ -685,7 +725,7 @@ export interface components {
          * AIMode
          * @enum {string}
          */
-        AIMode: "yolo" | "llm";
+        AIMode: "llm" | "yolo";
         /** Body_import_processor_api_processors_post */
         Body_import_processor_api_processors_post: {
             /** File */
@@ -893,7 +933,7 @@ export interface components {
              * @default true
              */
             enable_ai: boolean;
-            /** @default yolo */
+            /** @default llm */
             ai_mode: components["schemas"]["AIMode"];
             /** Ai Model */
             ai_model?: string | null;
@@ -944,8 +984,12 @@ export interface components {
              * @default true
              */
             enable_ai: boolean;
-            /** @default yolo */
-            ai_mode: components["schemas"]["AIMode"];
+            /**
+             * Ai Mode
+             * @default llm
+             * @constant
+             */
+            ai_mode: "llm";
             /** Ai Model */
             ai_model?: string | null;
             /**
@@ -1309,7 +1353,7 @@ export interface components {
          * ProductLevel
          * @enum {string}
          */
-        ProductLevel: "raw" | "l0" | "l1a" | "l1b" | "aux_context" | "thumbnail" | "stac" | "ai_result" | "result_package";
+        ProductLevel: "raw" | "l0" | "l1a" | "l1b" | "aux_context" | "processor_bundle" | "thumbnail" | "stac" | "ai_result" | "result_package";
         /** ProductManifest */
         ProductManifest: {
             /** Id */
@@ -2456,6 +2500,72 @@ export interface operations {
                 "application/json": components["schemas"]["SatelliteCreateRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lookup_satellite_norad_api_satellites_norad__norad_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                norad_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_ground_stations_api_ground_stations_get: {
+        parameters: {
+            query: {
+                name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -13,7 +13,7 @@ GPU Payload 的仿真数据。项目只以完整 App 交付；不再支持前后
 - 默认 **Jetson GPU**：Mac 保留 Ground、Platform、Optical 与界面；Jetson 执行 L1
  处理（L1A/L1B/STAC）、自定义 L1 Docker 沙箱和 Ollama 视觉分析。Jetson 离线或
  版本不一致时任务 L1/AI 阶段明确阻塞，不会回退至 Mac。
-- **Local GPU** 仅在开发者模式中提供，用于本机开发、演示和排障，不是正式用户路径。
+- GPU 推理与 L1 处理仅由 Jetson 执行；桌面端不会启动本机 GPU 或本机 Ollama 回退。
 
 详细使用、开发和打包方式见 [桌面版指南](docs/DESKTOP.md)。Jetson 部署方式见
 [Jetson GPU Payload](deploy/jetson/README.md)。

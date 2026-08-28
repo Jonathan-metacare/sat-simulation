@@ -69,7 +69,7 @@ class MissionRow(Base):
         String(40), default=ExecutionState.WAITING, index=True
     )
     active_substage: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    ai_mode: Mapped[str] = mapped_column(String(20), default=AIMode.YOLO)
+    ai_mode: Mapped[str] = mapped_column(String(20), default=AIMode.LLM)
     planned_windows_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     legacy_terminal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

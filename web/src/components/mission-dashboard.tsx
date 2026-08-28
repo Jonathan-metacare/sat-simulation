@@ -86,7 +86,7 @@ export function MissionDashboard() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newSatelliteOpen, setNewSatelliteOpen] = useState(false);
   const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
-  const [aiMode, setAiMode] = useState<AIMode>("yolo");
+  const aiMode: AIMode = "llm";
   const [projectContext, setProjectContext] = useState(() => t("mission.defaultProjectContext"));
   const [analysisPrompt, setAnalysisPrompt] = useState(() => t("mission.defaultAnalysisPrompt"));
   const [missionResult, setMissionResult] = useState<MissionResultResponse>();
@@ -127,7 +127,6 @@ export function MissionDashboard() {
       void bridge.getSettings().then((saved) => {
         setLocale(saved.locale);
         setTheme(saved.theme);
-        setAiMode(saved.activeAiMode);
         setSavedScenarioId(saved.activeScenarioId);
       });
       return;
@@ -289,7 +288,7 @@ export function MissionDashboard() {
       if (scenarioActiveMission) {
         await api.cancelMission(scenarioActiveMission.command.id);
       }
-      const configuredModel = aiMode === "llm" ? (await desktopBridge()?.getSettings())?.llmModel : undefined;
+      const configuredModel = (await desktopBridge()?.getSettings())?.llmModel;
       const created = await api.createMission(
         scenario.config.id, t("mission.defaultName"), aiMode, projectContext.trim(), analysisPrompt.trim(), configuredModel || undefined
       );
@@ -438,7 +437,7 @@ export function MissionDashboard() {
     aiMode: mission.ai_mode,
     providerStatus: mission.ai_mode === "llm"
       ? providerHealth.language?.status
-      : providerHealth.detection?.status,
+      : "retired",
   } : undefined;
 
   return <div className="workspace-shell">
@@ -485,7 +484,7 @@ export function MissionDashboard() {
       </header>
       {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-orange-400/25 bg-orange-400/10 px-4 py-3 text-sm text-orange-100"><AlertTriangle size={16} />{error}</div>}
 
-      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} onAiMode={setAiMode} initialSection={settingsSection} onScenarioImported={() => void reload()} onSettingsSaved={() => void reload()} activeScenarioId={scenario?.config.id} onScenarioSelected={(selected) => {
+      <DesktopSettingsPanel open={desktopSettingsOpen} onClose={() => setDesktopSettingsOpen(false)} locale={locale} onLocale={setLocale} onTheme={setTheme} initialSection={settingsSection} onScenarioImported={() => void reload()} onSettingsSaved={() => void reload()} activeScenarioId={scenario?.config.id} onScenarioSelected={(selected) => {
         return (async () => {
           if (selected.config.id === scenario?.config.id) return;
           setWorking(true);
@@ -614,8 +613,8 @@ export function MissionDashboard() {
         <div className="panel w-full max-w-md rounded-2xl p-5 shadow-2xl shadow-cyan-950/50">
           <div className="mb-1 text-lg font-medium text-slate-50">{t("mission.createTitle")}</div>
           <p className="mb-5 text-xs leading-5 text-slate-500">{mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("mission.createReplaceDesc") : t("mission.createDesc")}</p>
-          <div className="mb-5 rounded-xl border border-cyan-300/20 bg-cyan-300/[.06] p-3 text-xs text-slate-300">{t("mission.aiModeNotice", { mode: aiMode.toUpperCase() })}</div>
-          {aiMode === "llm" && <div className="mb-5 space-y-3"><label className="block text-xs text-slate-400">{t("mission.projectContext")}<textarea value={projectContext} onChange={(event) => setProjectContext(event.target.value)} maxLength={4000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.projectPlaceholder")} /></label><label className="block text-xs text-slate-400">{t("mission.analysisPrompt")}<textarea value={analysisPrompt} onChange={(event) => setAnalysisPrompt(event.target.value)} maxLength={2000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.promptPlaceholder")} /></label></div>}
+          <div className="mb-5 rounded-xl border border-cyan-300/20 bg-cyan-300/[.06] p-3 text-xs text-slate-300">{t("mission.aiModeNotice", { mode: "LLM" })}</div>
+          <div className="mb-5 space-y-3"><label className="block text-xs text-slate-400">{t("mission.projectContext")}<textarea value={projectContext} onChange={(event) => setProjectContext(event.target.value)} maxLength={4000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.projectPlaceholder")} /></label><label className="block text-xs text-slate-400">{t("mission.analysisPrompt")}<textarea value={analysisPrompt} onChange={(event) => setAnalysisPrompt(event.target.value)} maxLength={2000} rows={3} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-slate-200 outline-none focus:border-cyan-300/40" placeholder={t("mission.promptPlaceholder")} /></label></div>
           <div className="flex justify-end gap-2"><Button onClick={() => setCreateOpen(false)}>{t("actions.cancel")}</Button><Button onClick={createMission} active disabled={working}>{working ? t("actions.initRunning") : mission && !["completed", "cancelled"].includes(mission.execution_state) ? t("actions.endAndCreate") : t("actions.initMission")}</Button></div>
         </div>
       </div>}

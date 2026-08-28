@@ -1,4 +1,4 @@
-"""Frozen desktop entry point for the four local simulation services."""
+"""Frozen desktop entry point for the local simulation services."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Satellite SIL desktop service")
     parser.add_argument(
         "service",
-        choices=("ground", "platform", "optical", "gpu", "processor-worker", "reset-catalog-caches"),
+        choices=("ground", "platform", "optical", "processor-worker", "reset-catalog-caches"),
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
@@ -70,7 +70,7 @@ def main() -> None:
     elif arguments.service == "optical":
         from sat_simulation.services.optical import app
     else:
-        from sat_simulation.services.gpu import app
+        parser.error("unsupported desktop service")
 
     import uvicorn
 

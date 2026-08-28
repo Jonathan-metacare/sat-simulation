@@ -50,8 +50,9 @@ Jetson needs only Docker Engine with the Compose plugin, Docker running, and
 host-managed Ollama. It does not need a project checkout, Python, a venv, a
 `spacezenith` user or the legacy systemd service.
 
-1. Install and start Ollama, then pull the configured vision model, for example
-   `ollama pull qwen3-vl:8b`. Do not expose Ollama to the LAN.
+1. Install and start Ollama. Do not expose Ollama to the LAN. After the desktop
+   has deployed, use Settings → AI to install and select a vision model (for
+   example `qwen3-vl:8b`).
 2. In the transferred bundle, edit `spacezenith-gpu.env` if the model or timeout
    needs changing.
 3. Run `./import-run.sh`. It imports both ARM64 images, creates

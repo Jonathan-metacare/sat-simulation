@@ -916,6 +916,92 @@
         }
       }
     },
+    "/api/satellites/norad/{norad_id}": {
+      "post": {
+        "summary": "Lookup Satellite Norad",
+        "description": "Fetch the current KeepTrack OMM and return its TLE representation.",
+        "operationId": "lookup_satellite_norad_api_satellites_norad__norad_id__post",
+        "parameters": [
+          {
+            "name": "norad_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Norad Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Lookup Satellite Norad Api Satellites Norad  Norad Id  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ground-stations": {
+      "get": {
+        "summary": "Search Ground Stations",
+        "description": "Search the initialized local SatNOGS directory; never performs a live lookup.",
+        "operationId": "search_ground_stations_api_ground_stations_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Search Ground Stations Api Ground Stations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/scenarios/{scenario_id}/orbit": {
       "get": {
         "summary": "Get Scenario Orbit",
@@ -1853,8 +1939,8 @@
       "AIMode": {
         "type": "string",
         "enum": [
-          "yolo",
-          "llm"
+          "llm",
+          "yolo"
         ],
         "title": "AIMode"
       },
@@ -2237,7 +2323,7 @@
           },
           "ai_mode": {
             "$ref": "#/components/schemas/AIMode",
-            "default": "yolo"
+            "default": "llm"
           },
           "ai_model": {
             "anyOf": [
@@ -2332,8 +2418,10 @@
             "default": true
           },
           "ai_mode": {
-            "$ref": "#/components/schemas/AIMode",
-            "default": "yolo"
+            "type": "string",
+            "const": "llm",
+            "title": "Ai Mode",
+            "default": "llm"
           },
           "ai_model": {
             "anyOf": [
@@ -3208,6 +3296,7 @@
           "l1a",
           "l1b",
           "aux_context",
+          "processor_bundle",
           "thumbnail",
           "stac",
           "ai_result",

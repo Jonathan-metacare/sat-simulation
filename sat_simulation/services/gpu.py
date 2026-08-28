@@ -53,7 +53,6 @@ from sat_simulation.optical.pipeline import (
 )
 from sat_simulation.payload.providers import (
     OpenAICompatibleLanguageProvider,
-    YOLOHTTPProvider,
 )
 from sat_simulation.processors import ProcessorBlocked, ProcessorRunner, inspect_processor_bundle
 from sat_simulation.processors.templates import builtin_template, workspace_bundle
@@ -514,56 +513,40 @@ class GPUState:
         mode = AIMode(request["ai_mode"])
         manifest = ProductManifest.model_validate(job["manifest"])
         try:
-            if mode == AIMode.YOLO:
-                if not self.settings.yolo_api_url:
-                    raise ProviderBlocked("YOLO 未配置：请设置 SAT_SIM_YOLO_API_URL 后重试本步")
-                provider = YOLOHTTPProvider(
-                    self.settings.yolo_api_url,
-                    model=self.settings.yolo_model,
-                    timeout=self.settings.provider_timeout_seconds,
-                    api_key=self.settings.yolo_api_key,
-                )
-                model_result = await provider.detect(
-                    manifest,
-                    Path(job["path"]),
-                    {
-                        "thumbnail_path": job["thumbnail_path"],
-                        "provider_options": request.get("options", {}),
-                    },
-                )
-            else:
-                if not self.settings.llm_api_url:
-                    raise ProviderBlocked("LLM 未配置：请设置 SAT_SIM_LLM_API_URL 后重试本步")
-                selected_model = str(request.get("ai_model") or self.settings.llm_model)
-                if self.settings.llm_require_vision:
-                    if selected_model not in {model["name"] for model in await self.vision_models()}:
-                        raise ProviderBlocked(f"LLM 模型不可用或不支持视觉：{selected_model}")
-                provider = OpenAICompatibleLanguageProvider(
-                    self.settings.llm_api_url,
-                    model=selected_model,
-                    timeout=max(
-                        1.0,
-                        min(
-                            600.0,
-                            float(
-                                dict(request.get("options") or {}).get(
-                                    "provider_timeout_seconds",
-                                    self.settings.provider_timeout_seconds,
-                                )
-                            ),
+            if mode != AIMode.LLM:
+                raise ProviderBlocked("该历史 YOLO 任务已退役，只能查看既有结果，不能继续执行。")
+            if not self.settings.llm_api_url:
+                raise ProviderBlocked("LLM 未配置：请设置 SAT_SIM_LLM_API_URL 后重试本步")
+            selected_model = str(request.get("ai_model") or self.settings.llm_model)
+            if self.settings.llm_require_vision:
+                if selected_model not in {model["name"] for model in await self.vision_models()}:
+                    raise ProviderBlocked(f"LLM 模型不可用或不支持视觉：{selected_model}")
+            provider = OpenAICompatibleLanguageProvider(
+                self.settings.llm_api_url,
+                model=selected_model,
+                timeout=max(
+                    1.0,
+                    min(
+                        600.0,
+                        float(
+                            dict(request.get("options") or {}).get(
+                                "provider_timeout_seconds",
+                                self.settings.provider_timeout_seconds,
+                            )
                         ),
                     ),
-                    api_key=self.settings.llm_api_key,
-                )
-                model_result = await provider.analyze(
-                    {
-                        "thumbnail_path": job["thumbnail_path"],
-                        "mission_id": mission_id,
-                        "mode": mode,
-                        **dict(request.get("options") or {}),
-                    },
-                    [manifest],
-                )
+                ),
+                api_key=self.settings.llm_api_key,
+            )
+            model_result = await provider.analyze(
+                {
+                    "thumbnail_path": job["thumbnail_path"],
+                    "mission_id": mission_id,
+                    "mode": mode,
+                    **dict(request.get("options") or {}),
+                },
+                [manifest],
+            )
         except ProviderBlocked:
             raise
         except Exception as exc:
@@ -682,10 +665,6 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             "architecture": system_platform.machine(),
             "gtx_listener": app_settings.gpu_gtx_port,
             "providers": {
-                "detection": {
-                    "status": "configured" if app_settings.yolo_api_url else "not_configured",
-                    "api_url_configured": bool(app_settings.yolo_api_url),
-                },
                 "language": {
                     "status": "configured" if app_settings.llm_api_url else "not_configured",
                     "api_url_configured": bool(app_settings.llm_api_url),

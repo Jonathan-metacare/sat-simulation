@@ -60,8 +60,10 @@ class ExecutionState(StrEnum):
 
 
 class AIMode(StrEnum):
-    YOLO = "yolo"
     LLM = "llm"
+    # Retained only to deserialize persisted missions created before the
+    # LLM-only product change.  It is never accepted for new missions.
+    LEGACY_YOLO = "yolo"
 
 
 class ClockAction(StrEnum):
@@ -370,7 +372,7 @@ class MissionCommand(BaseModel):
     l1_processor_id: str = "builtin-l1"
     processor_snapshots: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_ai: bool = True
-    ai_mode: AIMode = AIMode.YOLO
+    ai_mode: AIMode = AIMode.LLM
     ai_model: str | None = Field(default=None, max_length=200)
     project_context: str = Field(default="SpaceZenith-Sim 光学观测任务", max_length=4000)
     analysis_prompt: str = Field(
@@ -389,7 +391,7 @@ class MissionCreate(BaseModel):
     target_longitude: float = Field(default=116.4074, ge=-180, le=180)
     scene_id: str = "demo-optical-scene"
     enable_ai: bool = True
-    ai_mode: AIMode = AIMode.YOLO
+    ai_mode: Literal[AIMode.LLM] = AIMode.LLM
     ai_model: str | None = Field(default=None, max_length=200)
     project_context: str = Field(default="SpaceZenith-Sim 光学观测任务", max_length=4000)
     analysis_prompt: str = Field(
@@ -637,23 +639,6 @@ class MissionDetail(MissionSummary):
     onboard_products: list[ProductManifest] = Field(default_factory=list)
     transfers: list[TransferRecord] = Field(default_factory=list)
     step_attempts: list[MissionStepAttempt] = Field(default_factory=list)
-
-
-class Detection(BaseModel):
-    label: Literal["ship", "aircraft", "vehicle"]
-    confidence: float = Field(ge=0, le=1)
-    bbox_pixel: tuple[float, float, float, float]
-    polygon_wgs84: list[tuple[float, float]] | None = None
-
-
-class DetectionResult(BaseModel):
-    status: Literal["ok", "not_configured", "unavailable", "error"]
-    provenance: Literal["model", "placeholder"]
-    provider: str
-    model_version: str | None = None
-    elapsed_ms: float = Field(default=0, ge=0)
-    detections: list[Detection] = Field(default_factory=list)
-    reason: str | None = None
 
 
 class AnalysisResult(BaseModel):

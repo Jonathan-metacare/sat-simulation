@@ -6,31 +6,25 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deployJetson, discoverJetsonHostKey, preflightJetson } from "./jetson-deployment.mjs";
+import { deployJetson, discoverJetsonHostKey, preflightJetson, pullJetsonOllamaModel } from "./jetson-deployment.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const webDirectory = path.resolve(directory, "..");
 const projectDirectory = path.resolve(webDirectory, "..");
+const desktopPackage = JSON.parse(fs.readFileSync(path.join(webDirectory, "package.json"), "utf8"));
+const desktopVersion = desktopPackage.version;
 const defaultSettings = {
   locale: "zh",
   theme: "dark",
-  activeAiMode: "yolo",
+  activeAiMode: "llm",
   activeScenarioId: "scenario-demo-beijing",
   cesiumIonToken: "",
   keeptrackApiKey: "",
-  // A provider is an optional external integration.  Do not probe a local
-  // Ollama endpoint until the user explicitly configures and enables LLM.
-  llmApiUrl: "",
   llmModel: "",
-  llmApiKey: "",
-  yoloApiUrl: "",
-  yoloModel: "default",
-  yoloApiKey: "",
   providerTimeoutSeconds: 30,
   gpuMode: "jetson",
   jetsonHost: "",
   jetsonSshUsername: "",
-  jetsonSshPassword: "",
   jetsonHostKeyFingerprint: "",
   jetsonDeploymentStatus: "unconfigured",
   jetsonDeploymentVersion: "",
@@ -86,17 +80,16 @@ function cleanSettings(value) {
   return {
     locale: value?.locale === "en" ? "en" : "zh",
     theme: value?.theme === "light" ? "light" : "dark",
-    activeAiMode: value?.activeAiMode === "llm" ? "llm" : "yolo",
+    activeAiMode: "llm",
     activeScenarioId: text("activeScenarioId"),
     cesiumIonToken: text("cesiumIonToken"),
     keeptrackApiKey: text("keeptrackApiKey"),
-    llmApiUrl: text("llmApiUrl"), llmModel: text("llmModel"), llmApiKey: text("llmApiKey"),
-    yoloApiUrl: text("yoloApiUrl"), yoloModel: text("yoloModel") || "default", yoloApiKey: text("yoloApiKey"),
+    llmModel: text("llmModel"),
     providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600 ? timeout : 30,
-    gpuMode: value?.gpuMode === "local" && localGpuAllowed() ? "local" : "jetson",
+    // Normalize legacy Local GPU preferences to the only supported Jetson mode.
+    gpuMode: "jetson",
     jetsonHost: text("jetsonHost"),
     jetsonSshUsername: text("jetsonSshUsername"),
-    jetsonSshPassword: text("jetsonSshPassword"),
     jetsonHostKeyFingerprint: text("jetsonHostKeyFingerprint"),
     jetsonDeploymentStatus: ["unconfigured", "pending", "deploying", "ready", "failed"].includes(value?.jetsonDeploymentStatus) ? value.jetsonDeploymentStatus : "unconfigured",
     jetsonDeploymentVersion: text("jetsonDeploymentVersion"),
@@ -108,10 +101,6 @@ function cleanSettings(value) {
   };
 }
 
-function localGpuAllowed() {
-  return !app.isPackaged || process.env.SAT_SIM_DEVELOPER_MODE === "1";
-}
-
 function bundledJetsonPayload(version) {
   return app.isPackaged
     ? path.join(process.resourcesPath, "jetson-payload")
@@ -120,10 +109,8 @@ function bundledJetsonPayload(version) {
 
 function jetsonConnection(credentials) {
   if (!settings.jetsonHost || !settings.jetsonSshUsername) throw new Error("Save Jetson host and SSH username first");
-  const password = typeof credentials?.password === "string" && credentials.password
-    ? credentials.password
-    : settings.jetsonSshPassword;
-  if (!password) throw new Error("Save a Jetson SSH password first");
+  const password = typeof credentials?.password === "string" ? credentials.password : "";
+  if (!password) throw new Error("Enter the Jetson SSH password for this session");
   return {
     host: settings.jetsonHost,
     username: settings.jetsonSshUsername,
@@ -158,7 +145,7 @@ async function availablePort() {
 }
 
 async function allocatePorts() {
-  const names = ["ground", "platform", "optical", "gpu", "downlink", "uplink", "gtx", "gtxResult", "payload", "payloadResult", "web"];
+  const names = ["ground", "platform", "optical", "downlink", "uplink", "gtxResult", "payload", "payloadResult", "web"];
   const ports = {};
   for (const name of names) ports[name] = await availablePort();
   return ports;
@@ -172,8 +159,12 @@ function appendLog(name, chunk) {
 function sharedEnvironment() {
   const { root, database } = runtimeDirectories();
   const ports = runtime.ports;
-  const remoteGpu = settings.gpuMode === "jetson";
-  const jetsonHttp = `http://${settings.jetsonHost}:${settings.jetsonApiPort}`;
+  // An unconfigured desktop deliberately points at an unreachable endpoint;
+  // the services can still start for configuration, but L1/AI cannot fall
+  // back to a local GPU or Ollama process.
+  const jetsonHttp = settings.jetsonHost
+    ? `http://${settings.jetsonHost}:${settings.jetsonApiPort}`
+    : "http://127.0.0.1:9";
   return {
     ...process.env,
     SAT_SIM_HOST: "127.0.0.1",
@@ -182,35 +173,28 @@ function sharedEnvironment() {
     SAT_SIM_ALLOWED_ORIGINS: `http://127.0.0.1:${ports.web}`,
     SAT_SIM_GROUND_API_PORT: String(ports.ground),
     SAT_SIM_PLATFORM_API_PORT: String(ports.platform),
-    SAT_SIM_GPU_API_PORT: String(ports.gpu),
     SAT_SIM_OPTICAL_API_PORT: String(ports.optical),
     SAT_SIM_GROUND_DOWNLINK_HOST: "127.0.0.1",
     SAT_SIM_GROUND_DOWNLINK_PORT: String(ports.downlink),
     SAT_SIM_PLATFORM_UPLINK_HOST: "127.0.0.1",
     SAT_SIM_PLATFORM_UPLINK_PORT: String(ports.uplink),
-    SAT_SIM_GPU_GTX_HOST: remoteGpu ? settings.jetsonHost : "127.0.0.1",
-    SAT_SIM_GPU_GTX_PORT: String(remoteGpu ? settings.jetsonGtxPort : ports.gtx),
+    SAT_SIM_GPU_GTX_HOST: settings.jetsonHost,
+    SAT_SIM_GPU_GTX_PORT: String(settings.jetsonGtxPort),
     SAT_SIM_PLATFORM_GTX_RESULT_HOST: "127.0.0.1",
-    SAT_SIM_PLATFORM_GTX_RESULT_PORT: String(remoteGpu ? settings.platformGtxResultPort : ports.gtxResult),
-    SAT_SIM_PLATFORM_GTX_RESULT_BIND_HOST: remoteGpu ? "0.0.0.0" : "127.0.0.1",
-    SAT_SIM_PLATFORM_GTX_RESULT_ADVERTISE_HOST: remoteGpu ? settings.desktopAdvertiseHost : "127.0.0.1",
+    SAT_SIM_PLATFORM_GTX_RESULT_PORT: String(settings.platformGtxResultPort),
+    SAT_SIM_PLATFORM_GTX_RESULT_BIND_HOST: "0.0.0.0",
+    SAT_SIM_PLATFORM_GTX_RESULT_ADVERTISE_HOST: settings.desktopAdvertiseHost,
     SAT_SIM_OPTICAL_PAYLOAD_HOST: "127.0.0.1",
     SAT_SIM_OPTICAL_PAYLOAD_PORT: String(ports.payload),
     SAT_SIM_PLATFORM_PAYLOAD_RESULT_HOST: "127.0.0.1",
     SAT_SIM_PLATFORM_PAYLOAD_RESULT_PORT: String(ports.payloadResult),
     SAT_SIM_PLATFORM_HTTP_URL: `http://127.0.0.1:${ports.platform}`,
-    SAT_SIM_GPU_HTTP_URL: remoteGpu ? jetsonHttp : `http://127.0.0.1:${ports.gpu}`,
+    SAT_SIM_GPU_HTTP_URL: jetsonHttp,
     SAT_SIM_GROUND_HTTP_URL: `http://127.0.0.1:${ports.ground}`,
     SAT_SIM_OPTICAL_HTTP_URL: `http://127.0.0.1:${ports.optical}`,
     // Desktop custom processors use the application-managed macOS sandbox.
     // A non-macOS build fails closed instead of silently using host Python.
     SAT_SIM_OCI_RUNTIME: "desktop-sandbox",
-    SAT_SIM_LLM_API_URL: settings.activeAiMode === "llm" ? settings.llmApiUrl : "",
-    SAT_SIM_LLM_MODEL: settings.llmModel,
-    SAT_SIM_LLM_API_KEY: settings.activeAiMode === "llm" ? settings.llmApiKey : "",
-    SAT_SIM_YOLO_API_URL: settings.activeAiMode === "yolo" ? settings.yoloApiUrl : "",
-    SAT_SIM_YOLO_MODEL: settings.yoloModel,
-    SAT_SIM_YOLO_API_KEY: settings.activeAiMode === "yolo" ? settings.yoloApiKey : "",
     SAT_SIM_PROVIDER_TIMEOUT_SECONDS: String(settings.providerTimeoutSeconds),
     SAT_SIM_KEEPTRACK_API_KEY: settings.keeptrackApiKey,
   };
@@ -408,7 +392,7 @@ async function stopProcess(name) {
 }
 
 async function stopStack() {
-  for (const name of ["web", "ground", "platform", "optical", "gpu"]) await stopProcess(name);
+  for (const name of ["web", "ground", "platform", "optical"]) await stopProcess(name);
 }
 
 async function startStack() {
@@ -419,12 +403,10 @@ async function startStack() {
   // All simulation nodes are independent at boot.  Start their frozen Python
   // runtimes together: the first import of Rasterio/GDAL can take tens of
   // seconds on macOS, but it must not serialize the whole desktop startup.
-  if (settings.gpuMode === "local") startService("gpu", runtime.ports.gpu);
   startService("optical", runtime.ports.optical);
   startService("platform", runtime.ports.platform);
   startService("ground", runtime.ports.ground);
   await Promise.all([
-    ...(settings.gpuMode === "local" ? [waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务")] : []),
     waitFor(`http://127.0.0.1:${runtime.ports.platform}/health`, "星务平台服务"),
     waitFor(`http://127.0.0.1:${runtime.ports.optical}/health`, "光学载荷服务"),
     waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务"),
@@ -436,12 +418,12 @@ async function startStack() {
 function diagnostics() {
   const locations = runtimeDirectories();
   return {
-    version: app.getVersion(),
+    version: desktopVersion,
     apiBase: runtime?.apiBase ?? null,
     ports: runtime?.ports ?? {},
     dataDirectory: locations.root,
     logDirectory: locations.logs,
-    services: ["gpu", "optical", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: name === "gpu" && settings.gpuMode === "jetson" ? false : processes.has(name) })),
+    services: ["optical", "platform", "ground", "web"].map((name) => ({ name, version: desktopVersion, running: processes.has(name) })),
   };
 }
 
@@ -517,7 +499,6 @@ function registerIpc() {
   ipcRegistered = true;
   ipcMain.on("desktop:api-base", (event) => { event.returnValue = runtime?.apiBase ?? "http://127.0.0.1:8000/api"; });
   ipcMain.handle("desktop:settings:get", () => settings);
-  ipcMain.handle("desktop:capabilities", () => ({ localGpuAllowed: localGpuAllowed() }));
   ipcMain.handle("desktop:jetson:discover-host-key", async (_event, credentials) => {
     const connection = jetsonConnection(credentials);
     return { fingerprint: await discoverJetsonHostKey(connection) };
@@ -541,10 +522,10 @@ function registerIpc() {
     await saveSettings({ ...settings, jetsonDeploymentStatus: "deploying", jetsonDeploymentError: "" });
     try {
       const result = await deployJetson({
-        connection, version: app.getVersion(), mode: request.mode,
+        connection, version: desktopVersion, mode: request.mode,
         model: settings.llmModel, timeoutSeconds: settings.providerTimeoutSeconds,
         callbackHost: settings.desktopAdvertiseHost, callbackPort: settings.platformGtxResultPort,
-        payloadPath: bundledJetsonPayload(app.getVersion()),
+        payloadPath: bundledJetsonPayload(desktopVersion),
       }, sendJetsonProgress);
       await saveSettings({ ...settings, jetsonDeploymentStatus: "ready", jetsonDeploymentVersion: result.version, jetsonDeploymentError: "" });
       return settings;
@@ -555,47 +536,48 @@ function registerIpc() {
       throw error;
     } finally { jetsonDeploymentInProgress = false; }
   });
+  ipcMain.handle("desktop:jetson:pull-model", async (_event, request) => {
+    if (jetsonDeploymentInProgress) throw new Error("A Jetson deployment or model installation is already running");
+    const connection = jetsonConnection(request?.credentials);
+    if (!connection.expectedFingerprint) throw new Error("Confirm the Jetson host key before installing a model");
+    jetsonDeploymentInProgress = true;
+    try {
+      const result = await pullJetsonOllamaModel({ connection, model: String(request?.model || "") }, sendJetsonProgress);
+      await saveSettings({ ...settings, llmModel: result.model });
+      return { settings, model: result.model };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sendJetsonProgress({ type: "error", message });
+      throw error;
+    } finally { jetsonDeploymentInProgress = false; }
+  });
   ipcMain.handle("desktop:data:reset", async (_event, action, confirmation) => resetLocalData(action, confirmation));
   ipcMain.handle("desktop:settings:save", async (_event, value) => {
     const prior = settings;
     let saved = await saveSettings(value);
-    const providerChanged = ["activeAiMode", "llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
-    const connectionChanged = ["gpuMode", "jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
+    const connectionChanged = ["jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
     const hostIdentityChanged = prior.jetsonHost !== saved.jetsonHost || prior.jetsonSshUsername !== saved.jetsonSshUsername;
     const keeptrackChanged = prior.keeptrackApiKey !== saved.keeptrackApiKey;
-    if (saved.gpuMode === "jetson" && (!saved.jetsonHost || !saved.desktopAdvertiseHost)) {
+    if (!saved.jetsonHost || !saved.desktopAdvertiseHost) {
       throw new Error("Jetson 模式需要填写 Jetson 地址和桌面可访问的 LAN 地址");
     }
-    if (saved.gpuMode === "jetson" && connectionChanged) {
+    if (connectionChanged) {
       saved = await saveSettings({
         ...saved, jetsonDeploymentStatus: "pending", jetsonDeploymentError: "",
         jetsonHostKeyFingerprint: hostIdentityChanged ? "" : saved.jetsonHostKeyFingerprint,
       });
     }
     if (connectionChanged) {
-      await stopStack(); await startStack(); await loadCurrentWeb(saved.gpuMode === "jetson" ? "?jetsonDeployment=1" : "");
+      await stopStack(); await startStack(); await loadCurrentWeb("?jetsonDeployment=1");
     } else if (keeptrackChanged) {
       await stopProcess("ground");
       startService("ground", runtime.ports.ground);
       await waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务");
-    } else if (providerChanged && saved.gpuMode === "local") {
-      await stopProcess("gpu");
-      startService("gpu", runtime.ports.gpu);
-      await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
     }
     if (prior.cesiumIonToken !== saved.cesiumIonToken) await restartWeb();
     return saved;
   });
   ipcMain.handle("desktop:diagnostics", () => diagnostics());
-  ipcMain.handle("desktop:gpu:restart", async () => {
-    if (settings.gpuMode === "jetson") {
-      await waitFor(`http://${settings.jetsonHost}:${settings.jetsonApiPort}/health`, "Jetson GPU 服务", 5000);
-      return diagnostics();
-    }
-    await stopProcess("gpu"); startService("gpu", runtime.ports.gpu);
-    await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
-    return diagnostics();
-  });
   ipcMain.handle("desktop:stack:restart", async () => { await stopStack(); await startStack(); await loadCurrentWeb(); return diagnostics(); });
   ipcMain.handle("desktop:open-data-directory", () => shell.openPath(runtimeDirectories().root));
   ipcMain.handle("desktop:open-log-directory", () => shell.openPath(runtimeDirectories().logs));

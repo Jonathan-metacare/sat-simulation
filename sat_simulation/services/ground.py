@@ -29,6 +29,7 @@ from sat_simulation import __version__
 from sat_simulation.common.clock import SimulationClock
 from sat_simulation.common.link import TCPReceiver, TCPTransport
 from sat_simulation.common.models import (
+    AIMode,
     ClockAction,
     ExecutionState,
     FaultRule,
@@ -971,7 +972,6 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         return {
             "version": __version__,
             "ai": {
-                "detection": "configured" if app_settings.yolo_api_url else "not_configured",
                 "language": "configured" if app_settings.llm_api_url else "not_configured",
             },
             "links": {
@@ -1601,6 +1601,11 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         mission = await state.repo.get_mission(mission_id)
         if not mission:
             raise HTTPException(404, "Mission not found.")
+        if mission["command"].ai_mode != AIMode.LLM:
+            raise HTTPException(
+                409,
+                "该历史 YOLO 任务已退役，只能查看既有结果，不能继续执行或重试。",
+            )
         key = f"{mission_id}:{request.idempotency_key or uuid4().hex}"
         previous = await state.repo.get_attempt_by_idempotency_key(key)
         if previous:

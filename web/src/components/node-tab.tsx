@@ -43,9 +43,7 @@ export function NodeTab({ node, mission, providerHealth, activeAiMode, gtxLink, 
     item.level === "thumbnail" || item.level === "raw_quicklook"
   );
   const aiResult = snapshot?.state.result as { result?: { content?: string; provider?: string; model_version?: string } } | undefined;
-  const providerStatus = activeAiMode === "llm"
-    ? providerHealth.language?.status
-    : providerHealth.detection?.status;
+  const providerStatus = activeAiMode === "llm" ? providerHealth.language?.status : "retired";
   const observationNotice = snapshot?.observation_notice?.startsWith("仿真观察数据")
     ? t("node.observationNotice")
     : snapshot?.observation_notice?.startsWith("节点当前不可达")

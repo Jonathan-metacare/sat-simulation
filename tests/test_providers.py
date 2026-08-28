@@ -8,7 +8,6 @@ import pytest
 from sat_simulation.common.models import ProductLevel, ProductManifest
 from sat_simulation.payload.providers import (
     OpenAICompatibleLanguageProvider,
-    PlaceholderDetectionProvider,
     PlaceholderLanguageProvider,
 )
 
@@ -26,11 +25,7 @@ async def test_placeholders_never_fabricate_model_output(tmp_path) -> None:
         size_bytes=path.stat().st_size,
         sha256="0" * 64,
     )
-    detection = await PlaceholderDetectionProvider().detect(product, path)
     language = await PlaceholderLanguageProvider().analyze({}, [product])
-    assert detection.status == "not_configured"
-    assert detection.detections == []
-    assert detection.provenance == "placeholder"
     assert language.status == "not_configured"
     assert language.content is None
 

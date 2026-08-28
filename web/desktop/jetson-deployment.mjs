@@ -5,6 +5,11 @@ import { Client } from "ssh2";
 
 const MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
 const SAFE_FILE = /^[A-Za-z0-9._-]+$/;
+const OLLAMA_MODEL = /^[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?$/;
+
+export function isSafeOllamaModel(model) {
+  return typeof model === "string" && model.length <= 200 && OLLAMA_MODEL.test(model);
+}
 
 function fingerprint(key) {
   return `SHA256:${createHash("sha256").update(key).digest("base64")}`;
@@ -108,6 +113,18 @@ export async function preflightJetson(connection, onLog) {
   } finally { client.end(); }
 }
 
+export async function pullJetsonOllamaModel({ connection, model }, onEvent) {
+  if (!isSafeOllamaModel(model)) throw new Error("Invalid Ollama model name");
+  const log = (message) => onEvent({ type: "log", message: redact(message, [connection.password]) });
+  const { client } = await connect(connection);
+  try {
+    onEvent({ type: "stage", name: "model" });
+    await execute(client, `ollama pull '${model}'`, { onLog: log });
+    onEvent({ type: "stage", name: "model-complete" });
+    return { model };
+  } finally { client.end(); }
+}
+
 async function restorePreviousRelease(client, previousRelease, onLog) {
   if (!previousRelease || !previousRelease.startsWith("/opt/spacezenith-sim/releases/")) return false;
   await execute(client, `cd '${previousRelease}' && sudo docker compose --env-file spacezenith-gpu.env up -d --force-recreate && ln -sfn '${previousRelease}' /opt/spacezenith-sim/current`, { onLog });
@@ -119,7 +136,7 @@ export async function deployJetson({ connection, version, mode, model, timeoutSe
   const stage = (name) => onEvent({ type: "stage", name });
   if (!/^[A-Za-z0-9._-]+$/.test(String(version))) throw new Error("Jetson release version is invalid");
   if (!/^[a-zA-Z0-9.-]+$/.test(String(callbackHost)) || !Number.isInteger(Number(callbackPort))) throw new Error("Invalid desktop callback address");
-  const safeModel = String(model).replace(/[^a-zA-Z0-9:._-]/g, "");
+  const safeModel = isSafeOllamaModel(model) ? model : "";
   const safeTimeout = Math.max(1, Math.min(600, Number(timeoutSeconds) || 120));
   stage("prepare-payload");
   const payload = await readPayload(payloadPath, version);
@@ -135,7 +152,11 @@ export async function deployJetson({ connection, version, mode, model, timeoutSe
     if (mode === "application" && !report.readyForApplicationDeploy) throw new Error("Jetson preflight failed: Docker, Compose, Ollama, aarch64, and 10 GiB free disk are required");
     if (mode === "initialize") {
       stage("initialize");
-      await execute(client, "sudo -S apt-get update && sudo -S apt-get install -y docker.io docker-compose-plugin curl && sudo -S usermod -aG docker $USER && (command -v ollama >/dev/null || curl -fsSL https://ollama.com/install.sh | sh)", { onLog: log, password: connection.password });
+      // Ubuntu 20.04's stock Jetson repository commonly has docker.io but not
+      // docker-compose-plugin. Keep an already working Compose v2 untouched;
+      // otherwise install the official ARM64 CLI plugin in Docker's standard
+      // system plugin location rather than failing the whole initialization.
+      await execute(client, "sudo -S apt-get update && sudo -S apt-get install -y curl && (command -v docker >/dev/null || sudo -S apt-get install -y docker.io) && (sudo docker compose version >/dev/null 2>&1 || (sudo -S install -d -m 0755 /usr/local/lib/docker/cli-plugins && sudo -S curl -fL --retry 3 --proto '=https' --tlsv1.2 https://github.com/docker/compose/releases/download/v2.27.1/docker-compose-linux-aarch64 -o /usr/local/lib/docker/cli-plugins/docker-compose && sudo -S chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose && sudo docker compose version)) && sudo -S usermod -aG docker $USER && (command -v ollama >/dev/null || curl -fsSL https://ollama.com/install.sh | sh)", { onLog: log, password: connection.password });
       report = await preflightJetson(connection, log);
       if (!report.readyForApplicationDeploy) throw new Error("Jetson initialization completed but Docker, Compose, Ollama, aarch64, or free disk requirements are still unmet");
     }
