@@ -1,13 +1,7 @@
 from sat_simulation.config import Settings
 
 
-def test_postgresql_url_selects_asyncpg_driver() -> None:
-    settings = Settings(database_url="postgresql://user:secret@localhost/sat_sim")
+def test_desktop_defaults_to_local_sqlite() -> None:
+    settings = Settings()
 
-    assert settings.database_url == "postgresql+asyncpg://user:secret@localhost/sat_sim"
-
-
-def test_postgres_alias_selects_asyncpg_driver() -> None:
-    settings = Settings(database_url="postgres://user:secret@localhost/sat_sim")
-
-    assert settings.database_url == "postgresql+asyncpg://user:secret@localhost/sat_sim"
+    assert settings.database_url == "sqlite+aiosqlite:///./runtime-data/sat-simulation.db"

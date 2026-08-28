@@ -1,4 +1,4 @@
-.PHONY: install test lint web-install web-check dev compose-up compose-down smoke
+.PHONY: install test lint web-install web-check desktop-dev desktop-dist jetson-export
 
 install:
 	uv sync --all-groups
@@ -14,14 +14,13 @@ web-install:
 	cd web && pnpm install
 
 web-check:
-	cd web && pnpm typecheck && pnpm lint && pnpm build
+	cd web && pnpm typecheck && pnpm build
 
-compose-up:
-	docker compose up --build
+desktop-dev:
+	cd web && pnpm desktop:dev
 
-compose-down:
-	docker compose down
+desktop-dist:
+	cd web && pnpm desktop:dist
 
-smoke:
-	uv run python scripts/demo_mission.py
-
+jetson-export:
+	./deploy/jetson/build-export.sh

@@ -18,4 +18,5 @@ web/public/cesium/
 web/release/
 runtime-data/
 *.log
-release
+.pnpm-store
+/release/

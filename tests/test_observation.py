@@ -42,8 +42,12 @@ def test_product_envelope_is_summarized_without_binary_hex(tmp_path) -> None:
     path = tmp_path / "l1b.tif"
     path.write_bytes(b"binary-geotiff-content")
     manifest = ProductManifest(
-        run_id="run-test", mission_id="mission-test", level=ProductLevel.L1B,
-        name=path.name, mime_type="image/tiff", size_bytes=path.stat().st_size,
+        run_id="run-test",
+        mission_id="mission-test",
+        level=ProductLevel.L1B,
+        name=path.name,
+        mime_type="image/tiff",
+        size_bytes=path.stat().st_size,
         sha256="a" * 64,
     )
     view = describe_payload(MessageType.PRODUCT, pack_product(manifest, path))
@@ -57,8 +61,12 @@ def test_product_bundle_is_summarized_without_binary_hex(tmp_path) -> None:
     path = tmp_path / "l0.npy"
     path.write_bytes(b"binary-l0-content")
     manifest = ProductManifest(
-        run_id="run-test", mission_id="mission-test", level=ProductLevel.L0,
-        name=path.name, mime_type="application/x-npy", size_bytes=path.stat().st_size,
+        run_id="run-test",
+        mission_id="mission-test",
+        level=ProductLevel.L0,
+        name=path.name,
+        mime_type="application/x-npy",
+        size_bytes=path.stat().st_size,
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
     view = describe_payload(
@@ -77,17 +85,26 @@ async def test_protocol_transaction_and_frames_are_persistent(tmp_path) -> None:
     await repo.init()
     try:
         transaction = ProtocolTransaction(
-            id="tx-1", run_id="run-1", mission_id="mission-1",
-            link=ProtocolLinkKind.GTX, message_type="L1_JOB",
-            source_node=NodeKind.PLATFORM, target_node=NodeKind.GPU,
+            id="tx-1",
+            run_id="run-1",
+            mission_id="mission-1",
+            link=ProtocolLinkKind.GTX,
+            message_type="L1_JOB",
+            source_node=NodeKind.PLATFORM,
+            target_node=NodeKind.GPU,
             direction="platform->gpu",
         )
         await repo.upsert_protocol_transaction(transaction)
         frame = ProtocolFrameTrace(
-            transaction_id=transaction.id, sequence=0, total=1,
-            message_type="L1_JOB", payload_bytes=64,
-            simulated_at=datetime(2026, 8, 12, tzinfo=UTC), crc32c="1234abcd",
-            ack_status="nak", missing_sequences=[0],
+            transaction_id=transaction.id,
+            sequence=0,
+            total=1,
+            message_type="L1_JOB",
+            payload_bytes=64,
+            simulated_at=datetime(2026, 8, 12, tzinfo=UTC),
+            crc32c="1234abcd",
+            ack_status="nak",
+            missing_sequences=[0],
         )
         await repo.add_protocol_frame(frame)
 

@@ -42,4 +42,17 @@ exports.default = async function afterPack(context) {
   await fs.rm(runtimeDestination, { recursive: true, force: true });
   await fs.mkdir(path.dirname(runtimeDestination), { recursive: true });
   await fs.cp(runtimeSource, runtimeDestination, { recursive: true, verbatimSymlinks: true });
+
+  if (isMac) {
+    const payloadSource = path.join(context.packager.projectDir, "desktop", "build", "jetson-payload");
+    const payloadDestination = path.join(resources, "jetson-payload");
+    try {
+      await fs.access(path.join(payloadSource, "payload.json"));
+      await fs.access(path.join(payloadSource, "SHA256SUMS"));
+    } catch {
+      throw new Error("Missing verified Jetson offline payload. Run pnpm desktop:jetson-payload before packaging the macOS DMG.");
+    }
+    await fs.rm(payloadDestination, { recursive: true, force: true });
+    await fs.cp(payloadSource, payloadDestination, { recursive: true });
+  }
 };

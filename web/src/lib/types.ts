@@ -11,15 +11,45 @@ export type ExecutionState =
 export type AIMode = "yolo" | "llm";
 export type NodeKind = "ground" | "platform" | "optical" | "gpu";
 export type ProtocolLinkKind = "uplink" | "downlink" | "gtx" | "payload_bus";
+export type ProcessorStage = "l0" | "l1";
+
+export interface SceneAsset {
+  id: string; scene_id: string; version: number; source_name: string;
+  source_mime_type: string; source_sha256: string; canonical_sha256: string;
+  width: number; height: number; bands: number; dtype: string; crs: string;
+  transform: number[]; conversion: Record<string, unknown>; created_at: string;
+}
+export interface ProcessorDefinition {
+  schema_version: 1; id: string; name: string; version: string;
+  stage: ProcessorStage; entrypoint: string; timeout_seconds: number;
+  cpu_limit: number; memory_mb: number; output_limit_mb: number;
+}
+export interface ProcessorVersion {
+  id: string; definition: ProcessorDefinition; sha256: string;
+  runtime_status: "builtin" | "ready" | "unavailable" | "running" | "completed" | "failed";
+  runtime_type?: string; source_files?: string[];
+  created_at: string;
+}
+export interface ProcessorSource {
+  id: string; processor_yaml: string; processor_py: string; readonly: boolean;
+}
+export interface ProcessorTemplate extends ProcessorSource {
+  definition: ProcessorDefinition;
+}
+export interface SceneRecord {
+  id: string; name: string; sha256: string; metadata: SceneAsset & { source_path?: string };
+  created_at?: string;
+}
 
 export interface ScenarioConfig {
   id: string; name: string; seed: number; epoch: string; clock_rate: 1 | 10 | 100;
   tle_line1: string; tle_line2: string; satellite_name: string;
   ground_station_name: string; ground_station_latitude: number;
   ground_station_longitude: number; ground_station_altitude_m: number;
-  deterministic_contact: boolean; scene_id: string; scene_ready: boolean;
-  links: Record<"gtx" | "uplink" | "downlink", {
-    kind: "gtx" | "uplink" | "downlink"; bandwidth_bps: number; latency_ms: number;
+  deterministic_contact: boolean; scene_id: string; scene_asset_id?: string;
+  l0_processor_id: string; l1_processor_id: string; scene_ready: boolean;
+  links: Record<"gtx" | "uplink" | "downlink" | "payload_bus", {
+    kind: "gtx" | "uplink" | "downlink" | "payload_bus"; bandwidth_bps: number; latency_ms: number;
     jitter_ms: number; frame_payload_bytes: number; queue_capacity_bytes: number; max_retries: number;
   }>;
   sensor: {
@@ -33,6 +63,22 @@ export interface ClockState {
   paused: boolean; revision: number;
 }
 export interface ScenarioRecord { config: ScenarioConfig; clock: ClockState; }
+export interface SatelliteCreateRequest {
+  satellite_name: string; tle_line1: string; tle_line2: string;
+  ground_station_name: string; latitude: number; longitude: number; altitude_m: number;
+}
+export interface SatelliteNoradLookup {
+  norad_id: number; satellite_name: string; omm_epoch: string;
+  tle_line1: string; tle_line2: string; checked_at: string;
+}
+export interface GroundStationSearchResult {
+  station_id: number; name: string; latitude: number; longitude: number;
+  altitude_m: number; min_horizon: number | null; status: string;
+}
+export interface GroundStationSearchResponse {
+  status: "ready" | "initializing" | "failed";
+  results: GroundStationSearchResult[];
+}
 export interface ContactWindow {
   aos: string; los: string; max_elevation_at: string; max_elevation_deg: number;
 }
@@ -45,7 +91,10 @@ export interface MissionCommand {
   id: string; run_id: string; scenario_id: string; name: string;
   target_name: string; target_latitude: number; target_longitude: number;
   requested_at: string; scene_id: string; enable_ai: boolean;
-  ai_mode: AIMode; project_context: string; analysis_prompt: string;
+  ai_mode: AIMode; ai_model?: string | null; project_context: string; analysis_prompt: string;
+  scene_asset_id?: string; l0_processor_id: string; l1_processor_id: string;
+  scene_asset?: SceneAsset;
+  processor_snapshots?: Record<string, { id: string; version: string; sha256: string }>;
   scenario_snapshot?: ScenarioConfig;
   planned_windows: PlannedWindows;
 }

@@ -43,6 +43,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .grid-scan { background-image: linear-gradient(var(--scan-a) 1px,transparent 1px),linear-gradient(90deg,var(--scan-b) 1px,transparent 1px); background-size: 28px 28px; }
 .workspace-shell { display:flex; width:100%; min-height:100vh; align-items:stretch; }
 .mission-content { flex:1 1 0%; min-width:0; }
+.ground-panel-pair { display:grid; gap:1rem; }
+@media (min-width:1024px) {
+  .ground-panel-pair { grid-template-columns:minmax(0,1.2fr) minmax(22.5rem,.8fr); }
+}
 .activity-bar { position:sticky; top:0; flex:0 0 var(--activity-bar-width); width:var(--activity-bar-width); height:100vh; background:rgba(3,14,23,.98); backdrop-filter:blur(16px); }
 .activity-bar-button { display:flex; align-items:center; justify-content:center; width:2.75rem; height:2.75rem; margin:.18rem 0; border:1px solid transparent; border-radius:.7rem; color:#7897a8; transition:color .18s ease,background .18s ease,border-color .18s ease; }
 .activity-bar-button:hover { color:#bff7ff; background:rgba(81,229,255,.1); border-color:rgba(81,229,255,.2); }
@@ -122,3 +126,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 /* The settings menu needs a clearly visible hover state in either theme. */
 :root[data-theme="light"] .settings-menu-item:hover { background:rgba(8,145,178,.22) !important; color:#062f40 !important; }
+
+/* Reset controls use semantic colors, so they retain contrast in both glass themes. */
+.settings-menu-item--danger { color:#fdba74; }
+.settings-menu-item--danger:hover { color:#fff7ed; background:rgba(234,88,12,.22); }
+.reset-row { border-color:rgba(251,146,60,.32); background:rgba(234,88,12,.06); color:#fed7aa; }
+.reset-row--active { border-color:rgba(251,146,60,.72); background:rgba(234,88,12,.13); }
+.reset-help { color:#fdba74; cursor:help; }
+.reset-action { border-color:rgba(251,146,60,.65); background:rgba(234,88,12,.16); color:#ffedd5; }
+.reset-action:hover:not(:disabled) { border-color:#fb923c; background:rgba(234,88,12,.28); }
+.reset-confirm { border-color:rgba(251,146,60,.26); color:#fed7aa; }
+:root[data-theme="light"] .settings-menu-item--danger { color:#9a3412 !important; }
+:root[data-theme="light"] .settings-menu-item--danger:hover { color:#431407 !important; background:rgba(234,88,12,.18) !important; }
+:root[data-theme="light"] .reset-row { border-color:rgba(194,65,12,.34); background:rgba(255,237,213,.72); color:#431407; }
+:root[data-theme="light"] .reset-row--active { border-color:rgba(194,65,12,.7); background:rgba(254,215,170,.72); }
+:root[data-theme="light"] .reset-help { color:#9a3412; }
+:root[data-theme="light"] .reset-action { border-color:rgba(194,65,12,.58); background:rgba(255,237,213,.95); color:#7c2d12; }
+:root[data-theme="light"] .reset-action:hover:not(:disabled) { border-color:#9a3412; background:#fed7aa; color:#431407; }
+:root[data-theme="light"] .reset-confirm { border-color:rgba(194,65,12,.25); color:#7c2d12; }

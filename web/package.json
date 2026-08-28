@@ -1,6 +1,6 @@
 {
   "name": "spacezenith-sim",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "SpaceZenith-Sim satellite onboard AI software-in-the-loop desktop dashboard",
   "author": "SpaceZenith",
   "private": true,
@@ -14,11 +14,11 @@
     "desktop:dev": "electron desktop/main.mjs",
     "desktop:python": "node desktop/scripts/build-python.mjs",
     "desktop:python:win": "node desktop/scripts/build-python.mjs --platform=win32",
-    "desktop:dist": "pnpm build && pnpm desktop:python && electron-builder --config desktop/electron-builder.yml --mac dmg --arm64",
+    "desktop:jetson-payload": "node desktop/scripts/build-jetson-payload.mjs",
+    "desktop:dist": "pnpm build && pnpm desktop:python && pnpm desktop:jetson-payload && electron-builder --config desktop/electron-builder.yml --mac dmg --arm64",
     "desktop:dist:win": "pnpm build && pnpm desktop:python:win && electron-builder --config desktop/electron-builder.yml --win nsis --x64",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "generate:api": "../.venv/bin/python ../scripts/export_openapi.py && openapi-typescript openapi.json -o src/lib/openapi.generated.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -30,6 +30,7 @@
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "ssh2": "^1.17.0",
     "zustand": "^5.0.7"
   },
   "devDependencies": {
@@ -50,6 +51,8 @@
   },
   "packageManager": "pnpm@10.26.2",
   "pnpm": {
-    "onlyBuiltDependencies": ["electron"]
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
   }
 }

@@ -3,23 +3,26 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
+import tempfile
 import zipfile
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 from uuid import uuid4
 
 import httpx
 import rasterio
 import yaml
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 from pydantic import ValidationError
 from sgp4.api import Satrec
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from sat_simulation import __version__
@@ -29,24 +32,32 @@ from sat_simulation.common.models import (
     ClockAction,
     ExecutionState,
     FaultRule,
+    ImportedScenarioYaml,
     LinkKind,
     MissionAdvance,
     MissionCommand,
     MissionCreate,
     MissionDetail,
     MissionPhase,
+    MissionPromptUpdate,
     MissionStatus,
     MissionSummary,
     NodeArtifact,
     NodeKind,
     NodeSnapshot,
+    ProcessorExecution,
+    ProcessorRuntimeStatus,
+    ProcessorStage,
+    ProcessorVersion,
+    ProcessorWorkspaceCreate,
     ProductLevel,
     ProductManifest,
     ProtocolFrameTrace,
     ProtocolTransaction,
-    ImportedScenarioYaml,
+    SatelliteCreateRequest,
     ScenarioConfig,
     ScenarioControl,
+    SceneAsset,
     TelemetryEvent,
     TransferRecord,
     TransferStatus,
@@ -58,7 +69,16 @@ from sat_simulation.common.orbit import orbit_track, plan_mission_windows
 from sat_simulation.common.protocol import Frame, MessageType
 from sat_simulation.common.wire import pack_json, unpack_json, unpack_product
 from sat_simulation.config import Settings, settings
+from sat_simulation.ground_stations import normalize_satnogs_station
+from sat_simulation.omm import extract_omm, omm_hash, omm_to_tle
 from sat_simulation.optical.pipeline import ensure_demo_scene, sha256_file
+from sat_simulation.optical.scenes import validate_and_convert_scene
+from sat_simulation.processors import ProcessorBundleError, inspect_processor_bundle
+from sat_simulation.processors.templates import (
+    builtin_template,
+    source_from_bundle,
+    workspace_bundle,
+)
 from sat_simulation.storage import Repository
 
 PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
@@ -100,6 +120,38 @@ PHASE_FLOW: dict[MissionPhase, tuple[MissionPhase, str, str, MissionStatus]] = {
     ),
 }
 
+logger = logging.getLogger(__name__)
+SATNOGS_CATALOG_KEY = "satnogs_ground_stations_v1"
+
+
+def new_satellite_config(body: SatelliteCreateRequest) -> ScenarioConfig:
+    """Validate a user-entered orbit and apply the safe scenario defaults."""
+    def valid_tle_line(line: str, line_number: str) -> bool:
+        if len(line) != 69 or not line.startswith(f"{line_number} ") or not line[-1].isdigit():
+            return False
+        checksum = sum(int(char) if char.isdigit() else 1 if char == "-" else 0 for char in line[:68])
+        return checksum % 10 == int(line[-1])
+
+    if not valid_tle_line(body.tle_line1, "1") or not valid_tle_line(body.tle_line2, "2"):
+        raise ValueError("TLE lines must have valid line numbers and checksums")
+    satellite = Satrec.twoline2rv(body.tle_line1, body.tle_line2)
+    if satellite.error:
+        raise ValueError(f"SGP4 error code {satellite.error}")
+    scenario_id = new_id("scenario")
+    return ScenarioConfig(
+        id=scenario_id,
+        name=body.satellite_name,
+        satellite_name=body.satellite_name,
+        tle_line1=body.tle_line1,
+        tle_line2=body.tle_line2,
+        ground_station_name=body.ground_station_name,
+        ground_station_latitude=body.latitude,
+        ground_station_longitude=body.longitude,
+        ground_station_altitude_m=body.altitude_m,
+        scene_id=f"{scenario_id}-scene",
+        scene_ready=False,
+    )
+
 # Telemetry stores a stable message key alongside its compatibility message.
 # Browser clients translate the key at render time, so event history also
 # changes language without rewriting the append-only event log.
@@ -117,6 +169,7 @@ EVENT_MESSAGE_KEYS: dict[str, str] = {
     "gtx_transfer_completed": "mission.event.gtxTransferCompleted",
     "ai_result_reused": "mission.event.aiResultReused",
     "ai_result_stored": "mission.event.aiResultStored",
+    "mission_prompt_updated": "mission.event.promptUpdated",
 }
 
 
@@ -126,6 +179,7 @@ class GroundState:
         self.data_dir = app_settings.data_dir / "ground"
         self.artifact_dir = self.data_dir / "artifacts"
         self.scene_dir = self.data_dir / "scenes"
+        self.processor_dir = self.data_dir / "processors"
         self.repo = Repository(app_settings.database_url)
         self.clocks: dict[str, SimulationClock] = {}
         self.receiver = TCPReceiver(self.handle_downlink)
@@ -136,10 +190,129 @@ class GroundState:
     async def start(self) -> None:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.scene_dir.mkdir(parents=True, exist_ok=True)
+        self.processor_dir.mkdir(parents=True, exist_ok=True)
         await self.repo.init()
         await self.ensure_default_scene()
         await self.repo.recover_running_missions()
         await self.receiver.start(self.settings.host, self.settings.ground_downlink_port)
+        # Refresh is deliberately detached from startup: cached or manual TLE input
+        # remains usable while KeepTrack is unreachable.
+        self._track_task(asyncio.create_task(self.refresh_stale_omm_cache()))
+        if await self.repo.catalog_status(SATNOGS_CATALOG_KEY) != "complete":
+            self._track_task(asyncio.create_task(self.import_satnogs_ground_stations()))
+
+    def _track_task(self, task: asyncio.Task[Any]) -> None:
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def lookup_norad(self, norad_id: int) -> dict[str, Any]:
+        if not 1 <= norad_id <= 999999:
+            raise ValueError("NORAD id must be between 1 and 999999")
+        api_key = (self.settings.keeptrack_api_key or "").strip()
+        if not api_key:
+            raise PermissionError(
+                "KeepTrack API key is not configured. Add it in Settings > Plugin & Keys."
+            )
+        url = self.settings.keeptrack_api_url.format(norad=norad_id)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(url, headers={"X-API-Key": api_key})
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise LookupError(f"NORAD {norad_id} was not found in KeepTrack") from exc
+            raise ConnectionError(
+                f"KeepTrack request failed with HTTP {exc.response.status_code}"
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ConnectionError("KeepTrack is unavailable or returned invalid JSON") from exc
+        omm = extract_omm(payload, norad_id)
+        tle_line1, tle_line2 = omm_to_tle(omm)
+        checked_at = datetime.now(UTC)
+        satellite_name = omm["OBJECT_NAME"]
+        await self.repo.upsert_latest_satellite_omm(
+            norad_id=norad_id,
+            satellite_name=satellite_name,
+            omm_epoch=omm["EPOCH"],
+            omm=omm,
+            tle_line1=tle_line1,
+            tle_line2=tle_line2,
+            content_hash=omm_hash(omm),
+            checked_at=checked_at,
+        )
+        return {
+            "norad_id": norad_id, "satellite_name": satellite_name, "omm_epoch": omm["EPOCH"],
+            "tle_line1": tle_line1, "tle_line2": tle_line2, "checked_at": checked_at,
+        }
+
+    async def refresh_stale_omm_cache(self) -> None:
+        """Check each cached NORAD at most once per UTC date, after service readiness."""
+        if not (self.settings.keeptrack_api_key or "").strip():
+            return
+        today = datetime.now(UTC).date()
+        for entry in await self.repo.cached_latest_satellite_omm():
+            checked_at = entry["last_checked_at"]
+            if checked_at.tzinfo is None:
+                # SQLite does not round-trip timezone metadata despite the column hint.
+                checked_at = checked_at.replace(tzinfo=UTC)
+            if checked_at.astimezone(UTC).date() >= today:
+                continue
+            try:
+                await self.lookup_norad(entry["norad_id"])
+            except Exception:
+                logger.warning(
+                    "KeepTrack background refresh failed for NORAD %s",
+                    entry["norad_id"],
+                    exc_info=True,
+                )
+
+    async def import_satnogs_ground_stations(self) -> None:
+        """Build the local station directory once, without delaying service readiness."""
+        if await self.repo.catalog_status(SATNOGS_CATALOG_KEY) == "complete":
+            return
+        await self.repo.set_catalog_status(SATNOGS_CATALOG_KEY, "importing")
+        url = self.settings.satnogs_station_api_url
+        visited: set[str] = set()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                while url and url not in visited:
+                    visited.add(url)
+                    response = await client.get(url, headers={"Accept": "application/json"})
+                    response.raise_for_status()
+                    payload = response.json()
+                    if isinstance(payload, list):
+                        candidates = payload
+                        next_url = None
+                    elif isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                        candidates = payload["results"]
+                        next_url = payload.get("next")
+                    else:
+                        raise ValueError("SatNOGS station response is neither a list nor a paginated result")
+                    stations: list[dict[str, Any]] = []
+                    for candidate in candidates:
+                        if not isinstance(candidate, dict):
+                            continue
+                        try:
+                            stations.append(normalize_satnogs_station(candidate))
+                        except ValueError:
+                            logger.warning("Skipping invalid station payload", exc_info=True)
+                    if stations:
+                        await self.repo.upsert_satnogs_ground_stations(stations)
+                    url = urljoin(str(response.url), str(next_url)) if next_url else ""
+            await self.repo.set_catalog_status(SATNOGS_CATALOG_KEY, "complete")
+        except Exception as exc:
+            await self.repo.set_catalog_status(SATNOGS_CATALOG_KEY, "failed", str(exc))
+            logger.warning("Station catalog import failed", exc_info=True)
+
+    async def search_ground_stations(self, name: str) -> dict[str, Any]:
+        status = await self.repo.catalog_status(SATNOGS_CATALOG_KEY)
+        if status != "complete":
+            return {"status": "initializing" if status in (None, "importing") else "failed", "results": []}
+        return {
+            "status": "ready",
+            "results": await self.repo.search_satnogs_ground_stations(name),
+        }
 
     async def ensure_default_scene(self) -> None:
         """Install the versioned Beijing fixture into the writable runtime data."""
@@ -157,18 +330,38 @@ class GroundState:
                 yaml.safe_load(source_yaml.read_text(encoding="utf-8"))
             )
         scene_path, metadata = ensure_demo_scene(self.scene_dir)
+        with rasterio.open(scene_path) as dataset:
+            digest = sha256_file(scene_path)
+            scene_asset = SceneAsset(
+                id=metadata.scene_id,
+                scene_id=metadata.scene_id,
+                source_name=scene_path.name,
+                source_mime_type="image/tiff",
+                source_sha256=digest,
+                canonical_sha256=digest,
+                width=dataset.width,
+                height=dataset.height,
+                bands=dataset.count,
+                crs=str(dataset.crs),
+                transform=tuple(dataset.transform),
+                conversion={"source": "built-in"},
+            )
         await self.repo.add_scene(
             scene_id=metadata.scene_id,
             name="demo-beijing built-in 16-bit GeoTIFF",
             path=str(scene_path),
-            sha256=sha256_file(scene_path),
-            metadata={"source": "built-in", "crs": metadata.crs},
+            sha256=digest,
+            metadata=scene_asset.model_dump(mode="json"),
         )
         if imported:
             defaults = default_link_profiles()
             links = {
                 kind: defaults[kind].model_copy(
-                    update={key: value for key, value in source.model_dump().items() if value is not None}
+                    update={
+                        key: value
+                        for key, value in source.model_dump().items()
+                        if value is not None
+                    }
                 )
                 for kind, source in (
                     (LinkKind.GTX, imported.links.gtx),
@@ -176,6 +369,7 @@ class GroundState:
                     (LinkKind.DOWNLINK, imported.links.downlink),
                 )
             }
+            links[LinkKind.PAYLOAD_BUS] = defaults[LinkKind.PAYLOAD_BUS]
             config = ScenarioConfig(
                 id=default_id,
                 name=imported.name,
@@ -190,12 +384,18 @@ class GroundState:
                 ground_station_altitude_m=imported.ground_station.altitude_m,
                 deterministic_contact=imported.ground_station.simulated,
                 scene_id=metadata.scene_id,
+                scene_asset_id=scene_asset.id,
                 scene_ready=True,
                 links=links,
                 sensor=imported.sensor,
             )
         else:
-            config = ScenarioConfig(id=default_id, scene_id=metadata.scene_id, scene_ready=True)
+            config = ScenarioConfig(
+                id=default_id,
+                scene_id=metadata.scene_id,
+                scene_asset_id=scene_asset.id,
+                scene_ready=True,
+            )
         clock = SimulationClock(config.epoch, config.clock_rate)
         self.clocks[config.id] = clock
         await self.repo.create_scenario(config, clock.state())
@@ -225,9 +425,7 @@ class GroundState:
         async with condition:
             condition.notify_all()
 
-    async def append_protocol_trace(
-        self, value: ProtocolTransaction | ProtocolFrameTrace
-    ) -> None:
+    async def append_protocol_trace(self, value: ProtocolTransaction | ProtocolFrameTrace) -> None:
         if isinstance(value, ProtocolTransaction):
             await self.repo.upsert_protocol_transaction(value)
             run_id = value.run_id
@@ -670,7 +868,7 @@ def enrich_mission(mission: dict[str, Any]) -> dict[str, Any]:
     )
     # The public mission detail is the Ground control-plane view. Product
     # manifests learned from platform events must not be projected into it:
-    # RAW/L0 are only observable in the Optical/Platform debug tabs and are
+    # RAW/L0 are only observable in the Optical/OBC debug tabs and are
     # not ground-accessible until a RESULT_PACKAGE is actually downlinked.
     mission["onboard_products"] = []
     return mission
@@ -695,6 +893,69 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    async def initialized_mission_for_configuration(
+        scenario_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the pre-flight mission, or reject an already-frozen configuration."""
+        active_id = await state.repo.active_mission_for_scenario(scenario_id)
+        if not active_id:
+            return None
+        mission = await state.repo.get_mission(active_id)
+        if not mission:
+            return None
+        if (
+            mission["phase"] != MissionPhase.INITIALIZED
+            or mission["execution_state"] != ExecutionState.WAITING
+        ):
+            raise HTTPException(
+                409,
+                "任务已开始执行，场景资产和 L0/L1 处理器版本已冻结。",
+            )
+        return mission
+
+    async def processor_snapshots_for(scenario: ScenarioConfig) -> dict[str, dict[str, Any]]:
+        snapshots: dict[str, dict[str, Any]] = {}
+        for stage, processor_id in (
+            (ProcessorStage.L0, scenario.l0_processor_id),
+            (ProcessorStage.L1, scenario.l1_processor_id),
+        ):
+            if processor_id.startswith("builtin-"):
+                snapshots[stage.value] = {
+                    "id": processor_id,
+                    "version": __version__,
+                    "sha256": "builtin",
+                }
+                continue
+            processor = await state.repo.get_processor(processor_id)
+            if not processor or processor.definition.stage != stage:
+                raise HTTPException(409, f"Scenario processor is unavailable: {processor_id}")
+            snapshots[stage.value] = processor.model_dump(mode="json")
+        return snapshots
+
+    async def refresh_initialized_command(
+        mission: dict[str, Any], scenario: ScenarioConfig
+    ) -> None:
+        """Freeze the latest pre-flight image and processor choices into the mission."""
+        scene_record = await state.repo.get_scene(scenario.scene_asset_id or scenario.scene_id)
+        if not scene_record:
+            raise HTTPException(409, "Scenario image is not ready. Import it in Optical first.")
+        try:
+            asset = SceneAsset.model_validate(scene_record["metadata"])
+        except ValidationError as exc:
+            raise HTTPException(409, "Scenario asset metadata is incomplete; import it again.") from exc
+        command: MissionCommand = mission["command"].model_copy(deep=True)
+        command.scene_id = scenario.scene_id
+        command.scene_asset_id = asset.id
+        command.scene_asset = asset
+        command.l0_processor_id = scenario.l0_processor_id
+        command.l1_processor_id = scenario.l1_processor_id
+        command.processor_snapshots = await processor_snapshots_for(scenario)
+        command.scenario_snapshot = scenario.model_copy(deep=True)
+        try:
+            await state.repo.update_mission_command(command)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -729,54 +990,315 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         except Exception as exc:
             return {"status": "unavailable", "reason": str(exc)}
 
+    @app.get("/api/providers/models")
+    async def provider_models(provider: str) -> dict[str, Any]:
+        if provider != "ollama":
+            raise HTTPException(404, "Only ollama model discovery is supported")
+        try:
+            async with httpx.AsyncClient(timeout=12) as client:
+                response = await client.get(f"{app_settings.gpu_http_url}/internal/providers/ollama/models")
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, f"GPU/Ollama unavailable: {exc}") from exc
+
+    async def prepare_scene_asset(
+        file: UploadFile,
+        scene_id: str,
+        center_latitude: float | None,
+        center_longitude: float | None,
+        pixel_size: float | None,
+        crs: str,
+        destination: Path,
+    ) -> tuple[SceneAsset, bytes]:
+        if not file.filename:
+            raise HTTPException(400, "Scene filename is required.")
+        content = await file.read()
+        try:
+            asset = await asyncio.to_thread(
+                validate_and_convert_scene,
+                content,
+                filename=file.filename,
+                scene_id=scene_id,
+                destination=destination,
+                center_latitude=center_latitude,
+                center_longitude=center_longitude,
+                pixel_size=pixel_size,
+                crs=crs,
+            )
+        except ValueError as exc:
+            destination.unlink(missing_ok=True)
+            raise HTTPException(422, str(exc)) from exc
+        return asset, content
+
+    @app.post("/api/scenes/validate")
+    async def validate_scene(
+        file: UploadFile = File(...),
+        scene_id: str = Query(..., min_length=1, max_length=120),
+        center_latitude: float | None = Query(default=None),
+        center_longitude: float | None = Query(default=None),
+        pixel_size: float | None = Query(default=None),
+        crs: str = Query(default="EPSG:4326"),
+    ) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory(prefix="sat-sim-scene-") as temporary:
+            asset, _content = await prepare_scene_asset(
+                file,
+                scene_id,
+                center_latitude,
+                center_longitude,
+                pixel_size,
+                crs,
+                Path(temporary) / "scene.tif",
+            )
+        return {"status": "valid", "asset": asset}
+
     @app.post("/api/scenes/import")
     async def import_scene(
         file: UploadFile = File(...),
         scene_id: str = Query(..., min_length=1, max_length=120),
         scenario_id: str | None = Query(default=None, min_length=1, max_length=120),
+        center_latitude: float | None = Query(default=None),
+        center_longitude: float | None = Query(default=None),
+        pixel_size: float | None = Query(default=None),
+        crs: str = Query(default="EPSG:4326"),
     ) -> dict[str, Any]:
-        if not file.filename or not file.filename.lower().endswith((".tif", ".tiff")):
-            raise HTTPException(400, "Only 16-bit GeoTIFF scenes are accepted.")
         scenario_config: ScenarioConfig | None = None
+        initialized_mission: dict[str, Any] | None = None
         if scenario_id:
             stored = await state.repo.get_scenario(scenario_id)
             if not stored:
                 raise HTTPException(404, "Scenario not found.")
             scenario_config, _clock = stored
             if scenario_config.scene_id != scene_id:
-                raise HTTPException(422, "GeoTIFF scene_id does not match the selected scenario.")
-        path = state.scene_dir / f"{scene_id}.tif"
-        content = await file.read()
-        path.write_bytes(content)
+                raise HTTPException(422, "scene_id does not match the selected scenario.")
+            initialized_mission = await initialized_mission_for_configuration(scenario_id)
+        temporary_path = state.scene_dir / f"{new_id('scene_import')}.tif"
+        asset, content = await prepare_scene_asset(
+            file,
+            scene_id,
+            center_latitude,
+            center_longitude,
+            pixel_size,
+            crs,
+            temporary_path,
+        )
+        asset.id = new_id("scene_asset")
+        path = state.scene_dir / f"{asset.id}.tif"
+        temporary_path.replace(path)
+        suffix = Path(file.filename or "scene.tif").suffix.lower()
+        source_path = state.scene_dir / f"{asset.id}.source{suffix}"
+        source_path.write_bytes(content)
+        optical_params: dict[str, str | float] = {
+            "asset_id": asset.id,
+            "scene_id": scene_id,
+            "crs": crs,
+        }
+        for key, value in (
+            ("center_latitude", center_latitude),
+            ("center_longitude", center_longitude),
+            ("pixel_size", pixel_size),
+        ):
+            if value is not None:
+                optical_params[key] = value
         try:
-            with rasterio.open(path) as src:
-                if src.dtypes[0] != "uint16":
-                    raise ValueError("scene must use uint16 samples")
-                metadata = {
-                    "width": src.width,
-                    "height": src.height,
-                    "bands": src.count,
-                    "crs": str(src.crs),
-                    "transform": tuple(src.transform),
-                }
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    f"{app_settings.optical_http_url}/internal/scenes",
+                    params=optical_params,
+                    files={
+                        "file": (
+                            file.filename,
+                            content,
+                            file.content_type or "application/octet-stream",
+                        )
+                    },
+                )
+                response.raise_for_status()
+                remote_asset = SceneAsset.model_validate(response.json())
         except Exception as exc:
             path.unlink(missing_ok=True)
-            raise HTTPException(400, f"Invalid GeoTIFF: {exc}") from exc
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{app_settings.platform_http_url}/internal/scenes",
-                params={"scene_id": scene_id},
-                files={"file": (path.name, content, "image/tiff")},
-            )
-            response.raise_for_status()
-        digest = sha256_file(path)
+            source_path.unlink(missing_ok=True)
+            raise HTTPException(502, f"Optical scene staging failed: {exc}") from exc
+        if remote_asset.canonical_sha256 != asset.canonical_sha256:
+            path.unlink(missing_ok=True)
+            source_path.unlink(missing_ok=True)
+            raise HTTPException(502, "Optical scene staging SHA-256 mismatch")
         await state.repo.add_scene(
-            scene_id=scene_id, name=file.filename, path=str(path), sha256=digest, metadata=metadata
+            scene_id=asset.id,
+            name=file.filename or scene_id,
+            path=str(path),
+            sha256=asset.canonical_sha256,
+            metadata=asset.model_dump(mode="json") | {"source_path": str(source_path)},
         )
         if scenario_config:
             scenario_config.scene_ready = True
+            scenario_config.scene_asset_id = asset.id
             await state.repo.update_scenario_config(scenario_config)
-        return {"id": scene_id, "sha256": digest, "metadata": metadata, "scene_ready": bool(scenario_id)}
+            if initialized_mission:
+                await refresh_initialized_command(initialized_mission, scenario_config)
+        return {
+            "id": asset.id,
+            "sha256": asset.canonical_sha256,
+            "metadata": asset,
+            "scene_ready": bool(scenario_id),
+        }
+
+    @app.get("/api/scenes")
+    async def list_scenes() -> list[dict[str, Any]]:
+        return await state.repo.list_scenes()
+
+    async def stage_processor_bundle(content: bytes, filename: str) -> ProcessorVersion:
+        try:
+            definition, digest = inspect_processor_bundle(content)
+        except ProcessorBundleError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        processor_id = f"{definition.id}-{definition.version}-{digest[:12]}"
+        target = state.processor_dir / f"{processor_id}.zip"
+        target.write_bytes(content)
+        base = (
+            app_settings.optical_http_url
+            if definition.stage == ProcessorStage.L0
+            else app_settings.gpu_http_url
+        )
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    f"{base}/internal/processors",
+                    params={"processor_id": processor_id},
+                    files={"file": (filename, content, "application/zip")},
+                )
+                response.raise_for_status()
+        except Exception as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(502, f"Processor staging failed: {exc}") from exc
+        processor = ProcessorVersion(
+            id=processor_id,
+            definition=definition,
+            sha256=digest,
+            bundle_path=str(target),
+            runtime_status=ProcessorRuntimeStatus.READY,
+            runtime_type=("desktop-sandbox" if app_settings.oci_runtime == "desktop-sandbox" else "oci"),
+        )
+        return await state.repo.add_processor(processor)
+
+    @app.get("/api/processors/templates")
+    async def processor_template(stage: ProcessorStage) -> dict[str, Any]:
+        template = builtin_template(stage)
+        return {
+            "id": template.definition.id,
+            "definition": template.definition,
+            "processor_yaml": template.manifest,
+            "processor_py": template.source,
+            "readonly": True,
+        }
+
+    @app.get("/api/processors/{processor_id}/source")
+    async def processor_source(processor_id: str) -> dict[str, Any]:
+        if processor_id in {"builtin-l0", "builtin-l1"}:
+            template = builtin_template(
+                ProcessorStage.L0 if processor_id.endswith("l0") else ProcessorStage.L1
+            )
+            return {
+                "id": processor_id,
+                "processor_yaml": template.manifest,
+                "processor_py": template.source,
+                "readonly": True,
+            }
+        processor = await state.repo.get_processor(processor_id)
+        if not processor or not processor.bundle_path:
+            raise HTTPException(404, "Processor source not found.")
+        try:
+            manifest, source = source_from_bundle(processor.bundle_path, processor.definition)
+        except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+            raise HTTPException(422, f"Processor source is unreadable: {exc}") from exc
+        return {
+            "id": processor.id,
+            "processor_yaml": manifest,
+            "processor_py": source,
+            "readonly": False,
+        }
+
+    @app.get("/api/processors/{processor_id}/download")
+    async def download_processor(processor_id: str) -> Response:
+        if processor_id in {"builtin-l0", "builtin-l1"}:
+            template = builtin_template(
+                ProcessorStage.L0 if processor_id.endswith("l0") else ProcessorStage.L1
+            )
+            content = workspace_bundle(template.definition, template.source)
+            return Response(
+                content=content,
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{processor_id}.zip"'},
+            )
+        processor = await state.repo.get_processor(processor_id)
+        if not processor or not processor.bundle_path or not Path(processor.bundle_path).is_file():
+            raise HTTPException(404, "Processor bundle not found.")
+        return FileResponse(
+            processor.bundle_path,
+            media_type="application/zip",
+            filename=f"{processor.id}.zip",
+        )
+
+    @app.post("/api/processors/validate")
+    async def validate_processor(file: UploadFile = File(...)) -> dict[str, Any]:
+        try:
+            definition, digest = inspect_processor_bundle(await file.read())
+        except ProcessorBundleError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"status": "valid", "definition": definition, "sha256": digest}
+
+    @app.post("/internal/processor-executions", status_code=204)
+    async def record_processor_execution(execution: ProcessorExecution) -> None:
+        await state.repo.upsert_processor_execution(execution)
+
+    @app.post("/api/processors", response_model=ProcessorVersion)
+    async def import_processor(file: UploadFile = File(...)) -> ProcessorVersion:
+        return await stage_processor_bundle(await file.read(), file.filename or "processor.zip")
+
+    @app.post("/api/processors/workspace", response_model=ProcessorVersion)
+    async def save_processor_workspace(workspace: ProcessorWorkspaceCreate) -> ProcessorVersion:
+        template = builtin_template(workspace.stage)
+        definition = template.definition.model_copy(
+            update={"id": workspace.id, "name": workspace.name, "version": workspace.version}
+        )
+        try:
+            content = workspace_bundle(definition, workspace.source)
+        except ProcessorBundleError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return await stage_processor_bundle(content, f"{workspace.id}-{workspace.version}.zip")
+
+    @app.get("/api/processors", response_model=list[ProcessorVersion])
+    async def list_processors(stage: ProcessorStage | None = None) -> list[ProcessorVersion]:
+        return await state.repo.list_processors(stage.value if stage else None)
+
+    @app.get("/api/processors/{processor_id}", response_model=ProcessorVersion)
+    async def get_processor(processor_id: str) -> ProcessorVersion:
+        processor = await state.repo.get_processor(processor_id)
+        if not processor:
+            raise HTTPException(404, "Processor not found.")
+        return processor
+
+    @app.post("/api/scenarios/{scenario_id}/processors")
+    async def select_processors(scenario_id: str, body: dict[str, str]) -> ScenarioConfig:
+        stored = await state.repo.get_scenario(scenario_id)
+        if not stored:
+            raise HTTPException(404, "Scenario not found.")
+        initialized_mission = await initialized_mission_for_configuration(scenario_id)
+        config, _clock = stored
+        for field, stage in (
+            ("l0_processor_id", ProcessorStage.L0),
+            ("l1_processor_id", ProcessorStage.L1),
+        ):
+            selected = body.get(field, getattr(config, field))
+            if selected not in {"builtin-l0", "builtin-l1"}:
+                processor = await state.repo.get_processor(selected)
+                if not processor or processor.definition.stage != stage:
+                    raise HTTPException(422, f"Invalid {stage.value} processor: {selected}")
+            setattr(config, field, selected)
+        await state.repo.update_scenario_config(config)
+        if initialized_mission:
+            await refresh_initialized_command(initialized_mission, config)
+        return config
 
     @app.post("/api/scenarios/import/yaml")
     async def import_scenario_yaml(file: UploadFile = File(...)) -> dict[str, Any]:
@@ -799,7 +1321,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 ],
             ) from exc
         try:
-            satellite = Satrec.twoline2rv(imported.satellite.tle_line1, imported.satellite.tle_line2)
+            satellite = Satrec.twoline2rv(
+                imported.satellite.tle_line1, imported.satellite.tle_line2
+            )
             if satellite.error:
                 raise ValueError(f"SGP4 error code {satellite.error}")
         except Exception as exc:
@@ -812,7 +1336,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         defaults = default_link_profiles()
         links = {
             kind: defaults[kind].model_copy(
-                update={key: value for key, value in source.model_dump().items() if value is not None}
+                update={
+                    key: value for key, value in source.model_dump().items() if value is not None
+                }
             )
             for kind, source in (
                 (LinkKind.GTX, imported.links.gtx),
@@ -820,6 +1346,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 (LinkKind.DOWNLINK, imported.links.downlink),
             )
         }
+        links[LinkKind.PAYLOAD_BUS] = defaults[LinkKind.PAYLOAD_BUS]
         config = ScenarioConfig(
             id=scenario_id,
             name=imported.name,
@@ -860,6 +1387,40 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         state.clocks[config.id] = clock
         await state.repo.create_scenario(config, clock.state())
         return {"config": config, "clock": clock.state()}
+
+    @app.post("/api/scenarios/satellite")
+    async def create_satellite_scenario(body: SatelliteCreateRequest) -> dict[str, Any]:
+        """Create a basic scenario before its observation scene is uploaded."""
+        try:
+            config = new_satellite_config(body)
+        except Exception as exc:
+            raise HTTPException(
+                422,
+                detail=[{"path": "tle_line1", "message": f"Invalid TLE: {exc}"}],
+            ) from exc
+        clock = SimulationClock(config.epoch, config.clock_rate)
+        state.clocks[config.id] = clock
+        await state.repo.create_scenario(config, clock.state())
+        return {"config": config, "clock": clock.state()}
+
+    @app.post("/api/satellites/norad/{norad_id}")
+    async def lookup_satellite_norad(norad_id: int) -> dict[str, Any]:
+        """Fetch the current KeepTrack OMM and return its TLE representation."""
+        try:
+            return await state.lookup_norad(norad_id)
+        except PermissionError as exc:
+            raise HTTPException(412, str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except ConnectionError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @app.get("/api/ground-stations")
+    async def search_ground_stations(name: str = Query(min_length=1, max_length=120)) -> dict[str, Any]:
+        """Search the initialized local SatNOGS directory; never performs a live lookup."""
+        return await state.search_ground_stations(name)
 
     @app.get("/api/scenarios")
     async def list_scenarios() -> list[dict[str, Any]]:
@@ -907,7 +1468,34 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             raise HTTPException(409, f"场景已有非终态任务 {active}")
         scenario = stored[0]
         if not scenario.scene_ready:
-            raise HTTPException(409, "Scenario image is not ready. Import the matching 16-bit GeoTIFF first.")
+            raise HTTPException(
+                409, "Scenario image is not ready. Import the matching 16-bit GeoTIFF first."
+            )
+        scene_record = await state.repo.get_scene(scenario.scene_asset_id or scenario.scene_id)
+        if not scene_record:
+            raise HTTPException(409, "Scenario asset is not registered.")
+        try:
+            scene_asset = SceneAsset.model_validate(scene_record["metadata"])
+        except ValidationError as exc:
+            raise HTTPException(
+                409, "Scenario asset metadata is incomplete; import it again."
+            ) from exc
+        processor_snapshots: dict[str, dict[str, Any]] = {}
+        for stage, processor_id in (
+            (ProcessorStage.L0, scenario.l0_processor_id),
+            (ProcessorStage.L1, scenario.l1_processor_id),
+        ):
+            if processor_id.startswith("builtin-"):
+                processor_snapshots[stage.value] = {
+                    "id": processor_id,
+                    "version": __version__,
+                    "sha256": "builtin",
+                }
+                continue
+            processor = await state.repo.get_processor(processor_id)
+            if not processor or processor.definition.stage != stage:
+                raise HTTPException(409, f"Scenario processor is unavailable: {processor_id}")
+            processor_snapshots[stage.value] = processor.model_dump(mode="json")
         plan = plan_mission_windows(scenario, max(scenario.epoch, utc_now()))
         clock = await state.clock_for(request.scenario_id)
         initial = plan.uplink.aos - timedelta(minutes=5)
@@ -921,8 +1509,14 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             target_latitude=plan.target_latitude,
             target_longitude=plan.target_longitude,
             scene_id=scenario.scene_id,
+            scene_asset_id=scene_asset.id,
+            scene_asset=scene_asset,
+            l0_processor_id=scenario.l0_processor_id,
+            l1_processor_id=scenario.l1_processor_id,
+            processor_snapshots=processor_snapshots,
             enable_ai=True,
             ai_mode=request.ai_mode,
+            ai_model=request.ai_model,
             project_context=request.project_context,
             analysis_prompt=request.analysis_prompt,
             scenario_snapshot=scenario,
@@ -941,12 +1535,65 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                 data={
                     "planned_windows": plan.model_dump(mode="json"),
                     "ai_mode": request.ai_mode,
+                    "ai_model": request.ai_model,
                     "message_key": EVENT_MESSAGE_KEYS["mission_initialized"],
                 },
             )
         )
         return MissionDetail.model_validate(
             enrich_mission((await state.repo.get_mission(command.id)) or {})
+        )
+
+    @app.patch("/api/missions/{mission_id}/prompt", response_model=MissionDetail)
+    async def update_mission_prompt(
+        mission_id: str, request: MissionPromptUpdate
+    ) -> MissionDetail:
+        """Allow an LLM instruction to change until its AI step begins."""
+        mission = await state.repo.get_mission(mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found.")
+        command: MissionCommand = mission["command"]
+        if command.ai_mode.value != "llm":
+            raise HTTPException(409, "只有 LLM 任务可以修改分析 Prompt。")
+        if mission.get("active_substage") == "ai" or mission["phase"] in {
+            MissionPhase.AI_COMPLETE,
+            MissionPhase.COMPLETED,
+        }:
+            raise HTTPException(409, "LLM 分析已开始，任务 Prompt 已冻结。")
+
+        updated = command.model_copy(update={"analysis_prompt": request.analysis_prompt.strip()})
+        # The platform owns the command copy used to build AI_EXECUTE.  Once
+        # uplink has happened, synchronize it before committing Ground's copy.
+        if mission["phase"] != MissionPhase.INITIALIZED:
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    response = await client.patch(
+                        f"{app_settings.platform_http_url}/internal/missions/{mission_id}/prompt",
+                        json={"analysis_prompt": updated.analysis_prompt},
+                    )
+                    response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"无法同步星务平台 Prompt：{exc}") from exc
+        try:
+            await state.repo.update_mission_analysis_prompt(updated)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+        await state.append_event(
+            TelemetryEvent(
+                run_id=updated.run_id,
+                mission_id=updated.id,
+                event_type="mission_prompt_updated",
+                status=mission["status"],
+                message="LLM 分析 Prompt 已更新，AI 分析步骤前仍可继续修改。",
+                simulated_at=(await state.clock_for(updated.scenario_id)).now(),
+                source="ground-orchestrator",
+                data={"message_key": EVENT_MESSAGE_KEYS["mission_prompt_updated"]},
+                channel="simulation_control",
+            )
+        )
+        return MissionDetail.model_validate(
+            enrich_mission((await state.repo.get_mission(mission_id)) or {})
         )
 
     @app.post("/api/missions/{mission_id}/advance", status_code=202)
@@ -1003,9 +1650,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         }:
             clock = await state.clock_for(mission["command"].scenario_id)
             paused_clock = await clock.pause()
-            await state.repo.update_scenario_clock(
-                mission["command"].scenario_id, paused_clock
-            )
+            await state.repo.update_scenario_clock(mission["command"].scenario_id, paused_clock)
             await state.repo.cancel_mission(mission_id)
             await state.append_event(
                 TelemetryEvent(
@@ -1016,10 +1661,10 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                     message="当前任务已由用户结束；历史事件与星上产品保留。",
                     simulated_at=clock.now(),
                     source="ground-orchestrator",
-                data={
-                    "phase_when_cancelled": mission["phase"],
-                    "message_key": EVENT_MESSAGE_KEYS["mission_cancelled"],
-                },
+                    data={
+                        "phase_when_cancelled": mission["phase"],
+                        "message_key": EVENT_MESSAGE_KEYS["mission_cancelled"],
+                    },
                 )
             )
         return MissionDetail.model_validate(
@@ -1046,24 +1691,40 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         if not mission:
             raise HTTPException(404, "Mission not found.")
         if node == NodeKind.GROUND:
-            artifacts = [NodeArtifact(
-                key=item.id, name=item.name, level=item.level, mime_type=item.mime_type,
-                size_bytes=item.size_bytes, sha256=item.sha256, observation_only=False,
-                previewable=item.level in {ProductLevel.THUMBNAIL, ProductLevel.STAC,
-                                           ProductLevel.AI_RESULT},
-            ) for item in mission["products"] if item.artifact_path]
+            artifacts = [
+                NodeArtifact(
+                    key=item.id,
+                    name=item.name,
+                    level=item.level,
+                    mime_type=item.mime_type,
+                    size_bytes=item.size_bytes,
+                    sha256=item.sha256,
+                    observation_only=False,
+                    previewable=item.level
+                    in {ProductLevel.THUMBNAIL, ProductLevel.STAC, ProductLevel.AI_RESULT},
+                )
+                for item in mission["products"]
+                if item.artifact_path
+            ]
             return NodeSnapshot(
-                node=node, mission_id=mission_id, status=str(mission["phase"]),
+                node=node,
+                mission_id=mission_id,
+                status=str(mission["phase"]),
                 state={
-                    "phase": mission["phase"], "execution_state": mission["execution_state"],
+                    "phase": mission["phase"],
+                    "execution_state": mission["execution_state"],
                     "downlinked_products": len(artifacts),
                     "last_event": mission["events"][-1].model_dump(mode="json")
-                    if mission["events"] else None,
-                }, artifacts=artifacts,
+                    if mission["events"]
+                    else None,
+                },
+                artifacts=artifacts,
             )
-        base = (
-            app_settings.gpu_http_url if node == NodeKind.GPU else app_settings.platform_http_url
-        )
+        base = {
+            NodeKind.GPU: app_settings.gpu_http_url,
+            NodeKind.OPTICAL: app_settings.optical_http_url,
+            NodeKind.PLATFORM: app_settings.platform_http_url,
+        }[node]
         try:
             async with httpx.AsyncClient(timeout=3) as client:
                 response = await client.get(
@@ -1073,7 +1734,10 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             return NodeSnapshot.model_validate(response.json())
         except Exception as exc:
             return NodeSnapshot(
-                node=node, mission_id=mission_id, reachable=False, status="unavailable",
+                node=node,
+                mission_id=mission_id,
+                reachable=False,
+                status="unavailable",
                 observation_notice="节点当前不可达；地面任务控制仍可使用。",
                 state={"reason": state.platform_error(exc)},
             )
@@ -1088,19 +1752,24 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             if not path.is_file() or state.artifact_dir.resolve() not in path.parents:
                 raise HTTPException(404, "Artifact not found.")
             return FileResponse(path, media_type=manifest.mime_type, filename=manifest.name)
-        base = (
-            app_settings.gpu_http_url if node == NodeKind.GPU else app_settings.platform_http_url
-        )
+        base = {
+            NodeKind.GPU: app_settings.gpu_http_url,
+            NodeKind.OPTICAL: app_settings.optical_http_url,
+            NodeKind.PLATFORM: app_settings.platform_http_url,
+        }[node]
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.get(
                     f"{base}/internal/missions/{mission_id}/nodes/{node.value}/artifacts/{key}"
                 )
                 response.raise_for_status()
-            headers = {"Content-Disposition": response.headers.get(
-                "Content-Disposition", f'attachment; filename="{key}"'
-            )}
+            headers = {
+                "Content-Disposition": response.headers.get(
+                    "Content-Disposition", f'attachment; filename="{key}"'
+                )
+            }
             from fastapi.responses import Response
+
             return Response(
                 response.content,
                 media_type=response.headers.get("Content-Type", "application/octet-stream"),
@@ -1203,8 +1872,9 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
             known_frames: set[str] = set()
             while True:
                 missions = await state.repo.list_missions()
-                mission_ids = [item["command"].id for item in missions
-                               if item["command"].run_id == run_id]
+                mission_ids = [
+                    item["command"].id for item in missions if item["command"].run_id == run_id
+                ]
                 for mission_id in mission_ids:
                     for transaction in reversed(
                         await state.repo.list_protocol_transactions(mission_id)
@@ -1222,9 +1892,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
                                 }
                 try:
                     async with state.protocol_conditions[run_id]:
-                        await asyncio.wait_for(
-                            state.protocol_conditions[run_id].wait(), timeout=10
-                        )
+                        await asyncio.wait_for(state.protocol_conditions[run_id].wait(), timeout=10)
                 except TimeoutError:
                     yield {"event": "keepalive", "data": json.dumps({"count": len(known)})}
 

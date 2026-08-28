@@ -1,29 +1,44 @@
-# Architecture
+# 桌面 App 架构
 
-The V1 runs three isolated nodes plus a web client and PostgreSQL:
+桌面 App 在本机运行 Ground、Platform、Optical、内嵌界面与 SQLite 持久化；`web`
+仅指 Electron 内嵌的渲染层。项目只交付完整 App，不提供独立前端、后端或浏览器 Web
+服务部署。L1/AI 可由 App 内嵌 GPU Payload 执行，或迁移到受信任 LAN 上的 Jetson：
 
 ```text
 web -> ground-api --COMMAND/RESULT_REQUEST uplink TCP--> platform-node
-                    ^                                   |       ^
-                    |                         AI_JOB/EXECUTE     | AI_RESULT
-                    |                                   v       |
-                    +---- RESULT_PACKAGE downlink -----+  gpu-node
+                    ^                                      |       |
+                    |                         Payload Bus   |       | GTX L0+aux
+                    |                                      v       v
+                    |                                 optical    gpu/Jetson
+                    |                                  RAW/L0      L1/AI
+                    +--------- RESULT_PACKAGE downlink <--- platform
 ```
 
-Only `ground-api` is public. Scenario control is an out-of-band SIL management
-plane; mission commands and all flight products use the simulated links. Each
-node has a different volume. A read-only or staged scene is environmental sensor
-input, not a spacecraft product.
+Ground 是 App 内部唯一的 UI API；场景控制是带外 SIL 管理平面，任务命令与飞行产品
+均走模拟链路。每个节点有独立的本地数据目录。只读或暂存场景属于环境传感器输入，
+不是航天器产品。
 
 The ground node owns the authoritative run ID, frozen three-window SGP4 plan and
 simulation clock. A mission persists the macro phase
 `initialized -> uplink_complete -> capture_complete -> processing_complete ->
 gtx_complete -> ai_complete -> completed`. Each advance runs exactly one phase,
-records an attempt and ends with both Ground and Platform clocks paused.
+records an attempt and ends with both Ground and OBC clocks paused.
 
-RAW/L0/L1A/L1B remain on Platform. Only L1B crosses GTX. The final ground result
+Optical owns the selected scene input and generates RAW and L0. OBC receives
+both only through the framed Payload Bus. OBC packages L0, frozen orbit,
+attitude, georeference and calibration context, and the selected custom L1 ZIP
+when applicable into `L1_JOB`; GPU/Jetson produces L1A/L1B/STAC and returns
+`L1_PRODUCTS` over GTX. In Jetson GPU mode this is the remote L1 processing
+boundary; AI consumes only the verified L1B.
+The final ground result
 package contains AI JSON, L1B, summary, manifests, STAC and thumbnail; it is created
 only after a mission-ID result request in the next Beijing pass.
+
+Built-in processors run in their owning node. On the desktop, custom ZIP processors
+use the application-managed Seatbelt runner. On Jetson, the custom L1 ZIP is
+delivered per mission over GTX and uses a network-disabled, non-root OCI container
+with a read-only root filesystem and bounded CPU, memory, PIDs, time and output
+space. There is no host-Python fallback.
 
 The software intentionally does not model GTX PHY, SerDes, PCB signal integrity,
 RF modulation, or CCSDS conformance.

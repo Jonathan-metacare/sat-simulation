@@ -177,7 +177,7 @@ class OpenAICompatibleLanguageProvider:
                             "image_url": {"url": f"data:image/png;base64,{encoded}"},
                         },
                     ],
-                }
+                },
             ],
             "max_tokens": 4096,
         }
@@ -199,7 +199,5 @@ class OpenAICompatibleLanguageProvider:
             content=str(content),
             finish_reason=finish_reason,
             truncated=finish_reason == "length",
-            reason="模型输出达到长度上限，报告可能不完整"
-            if finish_reason == "length"
-            else None,
+            reason="模型输出达到长度上限，报告可能不完整" if finish_reason == "length" else None,
         )

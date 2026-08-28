@@ -7,7 +7,8 @@ simulation timestamp in nanoseconds, and CRC32C. Payloads are split according to
 the link profile. EOF prompts ACK or a NAK list; missing or CRC-failed frames are
 selectively retransmitted. Completed products also require SHA-256 agreement.
 
-Application message types are `COMMAND`, `AI_JOB`, `AI_EXECUTE`, `AI_RESULT`,
+Application message types are `COMMAND`, `CAPTURE_REQUEST`, `RAW_PRODUCT`,
+`L0_PROCESS_REQUEST`, `L0_PRODUCT`, `L1_JOB`, `L1_PRODUCTS`, `AI_EXECUTE`, `AI_RESULT`,
 `RESULT_REQUEST`, `RESULT_PACKAGE`, control, event and product. Transport control
 uses EOF, ACK and NAK. `AI_RESULT` uses a separate GPU-to-Platform GTX listener;
 it is never hidden inside the `AI_EXECUTE` ACK.
@@ -25,5 +26,9 @@ The observation plane persists transaction summaries and bounded frame traces.
 JSON application bodies are formatted after recursive redaction of keys matching
 `key/token/secret/auth/password`. Binary ProductEnvelope bodies retain only MIME,
 size, SHA-256, manifest and member inventory; complete hex payloads are never stored.
-The in-process optical subsystem uses a separate logical `PayloadDriver/1` bus with
-`CAPTURE_REQUEST` and `RAW_PACKET`; it is not represented as TCP or GTX.
+The independent Optical node uses a framed TCP Payload Bus (`PayloadDriver/1`).
+Platform sends `CAPTURE_REQUEST` and later `L0_PROCESS_REQUEST`; Optical returns
+`RAW_PRODUCT` and `L0_PRODUCT` on its reverse listener. L0 plus ancillary context,
+and the selected custom L1 processor ZIP when applicable, cross GTX as `L1_JOB`.
+Jetson/GPU returns `L1_PRODUCTS` on the reverse GTX listener. Each file envelope
+has per-frame CRC32C and an overall SHA-256.

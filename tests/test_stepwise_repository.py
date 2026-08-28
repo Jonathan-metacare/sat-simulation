@@ -124,6 +124,43 @@ async def test_cancelled_mission_releases_scenario_and_preserves_history(tmp_pat
         await repository.close()
 
 
+@pytest.mark.asyncio
+async def test_initialized_mission_configuration_can_be_replaced_only_before_first_advance(tmp_path) -> None:
+    repository = Repository(f"sqlite+aiosqlite:///{tmp_path / 'preflight-config.db'}")
+    await repository.init()
+    try:
+        scenario = ScenarioConfig(id="scenario-preflight", epoch=datetime(2026, 5, 7, tzinfo=UTC))
+        clock = SimulationClock(scenario.epoch)
+        await repository.create_scenario(scenario, clock.state())
+        command = MissionCommand(run_id=clock.state().run_id, scenario_id=scenario.id)
+        await repository.create_mission(command)
+
+        configured = command.model_copy(
+            update={
+                "scene_asset_id": "scene_asset_preflight",
+                "l0_processor_id": "custom-l0",
+                "l1_processor_id": "custom-l1",
+            }
+        )
+        await repository.update_mission_command(configured)
+        stored = await repository.get_mission(command.id)
+        assert stored is not None
+        assert stored["command"].scene_asset_id == "scene_asset_preflight"
+        assert stored["command"].l0_processor_id == "custom-l0"
+        assert stored["command"].l1_processor_id == "custom-l1"
+
+        await repository.begin_step(
+            command.id,
+            target_phase=MissionPhase.UPLINK_COMPLETE,
+            idempotency_key=f"{command.id}:step-1",
+            active_substage="uplink",
+        )
+        with pytest.raises(RuntimeError, match="frozen"):
+            await repository.update_mission_command(configured)
+    finally:
+        await repository.close()
+
+
 def test_processing_macro_prepares_l1_context_status() -> None:
     target_phase, substage, _label, status = PHASE_FLOW[MissionPhase.CAPTURE_COMPLETE]
 

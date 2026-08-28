@@ -36,9 +36,7 @@ async def test_placeholders_never_fabricate_model_output(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_language_provider_sends_l1b_preview_and_user_context(
-    tmp_path, monkeypatch
-) -> None:
+async def test_language_provider_sends_l1b_preview_and_user_context(tmp_path, monkeypatch) -> None:
     thumbnail = tmp_path / "l1b.png"
     thumbnail.write_bytes(b"png-preview")
     product = ProductManifest(
@@ -60,9 +58,7 @@ async def test_language_provider_sends_l1b_preview_and_user_context(
             request=httpx.Request("POST", url),
             json={
                 "model": "vision-test",
-                "choices": [
-                    {"message": {"content": "发现一艘船。"}, "finish_reason": "stop"}
-                ],
+                "choices": [{"message": {"content": "发现一艘船。"}, "finish_reason": "stop"}],
             },
         )
 

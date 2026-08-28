@@ -1,0 +1,10 @@
+schema_version: 1
+id: demo-custom-l0
+name: Demo custom L0 packet reconstruction
+version: 1.0.0
+stage: l0
+entrypoint: processor.py
+timeout_seconds: 60
+cpu_limit: 1.0
+memory_mb: 512
+output_limit_mb: 128

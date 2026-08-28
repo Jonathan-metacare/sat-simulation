@@ -24,6 +24,8 @@ from sat_simulation.common.models import (
     MissionPhase,
     MissionStatus,
     MissionStepAttempt,
+    ProcessorExecution,
+    ProcessorVersion,
     ProductManifest,
     ProtocolFrameTrace,
     ProtocolTransaction,
@@ -163,6 +165,67 @@ class SceneRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class ProcessorVersionRow(Base):
+    __tablename__ = "simulation_processor_versions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    definition_id: Mapped[str] = mapped_column(String(80), index=True)
+    stage: Mapped[str] = mapped_column(String(20), index=True)
+    sha256: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    version_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ProcessorExecutionRow(Base):
+    __tablename__ = "simulation_processor_executions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(String(80), index=True)
+    processor_id: Mapped[str] = mapped_column(String(80), index=True)
+    stage: Mapped[str] = mapped_column(String(20), index=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    execution_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class LatestSatelliteOMMRow(Base):
+    """The current OMM only; historical element sets belong in sat-hud."""
+
+    __tablename__ = "latest_satellite_omm"
+    norad_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    satellite_name: Mapped[str] = mapped_column(String(160))
+    omm_epoch: Mapped[str] = mapped_column(String(80))
+    omm_json: Mapped[str] = mapped_column(Text)
+    tle_line1: Mapped[str] = mapped_column(String(69))
+    tle_line2: Mapped[str] = mapped_column(String(69))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class SatnogsGroundStationRow(Base):
+    """One current local search record for each SatNOGS station."""
+
+    __tablename__ = "satnogs_ground_stations"
+    station_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    latitude: Mapped[float] = mapped_column()
+    longitude: Mapped[float] = mapped_column()
+    altitude_m: Mapped[float] = mapped_column()
+    min_horizon: Mapped[float | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String(40))
+    created: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    last_seen: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CatalogMetadataRow(Base):
+    __tablename__ = "catalog_metadata"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(30))
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Repository:
     def __init__(self, database_url: str) -> None:
         if database_url.startswith("sqlite"):
@@ -267,6 +330,123 @@ class Repository:
                 for row in rows
             ]
 
+    async def upsert_latest_satellite_omm(
+        self,
+        *,
+        norad_id: int,
+        satellite_name: str,
+        omm_epoch: str,
+        omm: dict[str, Any],
+        tle_line1: str,
+        tle_line2: str,
+        content_hash: str,
+        checked_at: datetime | None = None,
+    ) -> None:
+        checked_at = checked_at or now_utc()
+        async with self.session() as session:
+            row = await session.get(LatestSatelliteOMMRow, norad_id)
+            if row is None:
+                session.add(LatestSatelliteOMMRow(
+                    norad_id=norad_id,
+                    satellite_name=satellite_name,
+                    omm_epoch=omm_epoch,
+                    omm_json=json.dumps(omm, sort_keys=True),
+                    tle_line1=tle_line1,
+                    tle_line2=tle_line2,
+                    content_hash=content_hash,
+                    last_checked_at=checked_at,
+                    updated_at=checked_at,
+                ))
+                return
+            row.satellite_name = satellite_name
+            row.omm_epoch = omm_epoch
+            row.omm_json = json.dumps(omm, sort_keys=True)
+            row.tle_line1 = tle_line1
+            row.tle_line2 = tle_line2
+            row.content_hash = content_hash
+            row.last_checked_at = checked_at
+            row.updated_at = checked_at
+
+    async def cached_latest_satellite_omm(self) -> list[dict[str, Any]]:
+        async with self.session() as session:
+            rows = (await session.scalars(select(LatestSatelliteOMMRow))).all()
+            return [
+                {
+                    "norad_id": row.norad_id, "satellite_name": row.satellite_name,
+                    "omm_epoch": row.omm_epoch, "omm": json.loads(row.omm_json),
+                    "tle_line1": row.tle_line1, "tle_line2": row.tle_line2,
+                    "content_hash": row.content_hash, "last_checked_at": row.last_checked_at,
+                    "updated_at": row.updated_at,
+                }
+                for row in rows
+            ]
+
+    async def clear_catalog_caches(self, catalog_key: str) -> None:
+        """Delete only disposable lookup catalogs, never mission or scenario data."""
+        async with self.session() as session:
+            await session.execute(delete(LatestSatelliteOMMRow))
+            await session.execute(delete(SatnogsGroundStationRow))
+            await session.execute(
+                delete(CatalogMetadataRow).where(CatalogMetadataRow.key == catalog_key)
+            )
+
+    async def catalog_status(self, key: str) -> str | None:
+        async with self.session() as session:
+            row = await session.get(CatalogMetadataRow, key)
+            return row.status if row else None
+
+    async def set_catalog_status(
+        self, key: str, status: str, last_error: str | None = None
+    ) -> None:
+        async with self.session() as session:
+            row = await session.get(CatalogMetadataRow, key)
+            if row is None:
+                session.add(CatalogMetadataRow(
+                    key=key, status=status, last_error=last_error, updated_at=now_utc()
+                ))
+                return
+            row.status = status
+            row.last_error = last_error
+            row.updated_at = now_utc()
+
+    async def upsert_satnogs_ground_stations(self, stations: list[dict[str, Any]]) -> None:
+        async with self.session() as session:
+            for station in stations:
+                station_id = station["station_id"]
+                row = await session.get(SatnogsGroundStationRow, station_id)
+                if row is None:
+                    session.add(SatnogsGroundStationRow(**station, updated_at=now_utc()))
+                    continue
+                for key, value in station.items():
+                    setattr(row, key, value)
+                row.updated_at = now_utc()
+
+    async def search_satnogs_ground_stations(
+        self, name: str, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        pattern = f"%{name.strip().lower()}%"
+        async with self.session() as session:
+            rows = (
+                await session.scalars(
+                    select(SatnogsGroundStationRow)
+                    .where(SatnogsGroundStationRow.name.ilike(pattern))
+                    .order_by(SatnogsGroundStationRow.name, SatnogsGroundStationRow.station_id)
+                    .limit(limit)
+                )
+            ).all()
+            return [
+                {
+                    "station_id": row.station_id,
+                    "name": row.name,
+                    "latitude": row.latitude,
+                    "longitude": row.longitude,
+                    "altitude_m": row.altitude_m,
+                    "min_horizon": row.min_horizon,
+                    "status": row.status,
+                }
+                for row in rows
+            ]
+
     async def create_mission(self, command: MissionCommand) -> None:
         row = MissionRow(
             id=command.id,
@@ -293,6 +473,32 @@ class Repository:
                 row.status = status
                 row.error = error
                 row.updated_at = now_utc()
+
+    async def update_mission_command(self, command: MissionCommand) -> None:
+        """Replace an initialized mission's pre-flight configuration snapshot."""
+        async with self.session() as session:
+            row = await session.get(MissionRow, command.id, with_for_update=True)
+            if not row:
+                raise KeyError(command.id)
+            if row.phase != MissionPhase.INITIALIZED or row.execution_state != ExecutionState.WAITING:
+                raise RuntimeError("mission configuration is frozen after its first advance")
+            row.command_json = command.model_dump_json()
+            row.ai_mode = command.ai_mode
+            row.updated_at = now_utc()
+
+    async def update_mission_analysis_prompt(self, command: MissionCommand) -> None:
+        """Persist a task-specific LLM instruction until AI execution starts."""
+        async with self.session() as session:
+            row = await session.get(MissionRow, command.id, with_for_update=True)
+            if not row:
+                raise KeyError(command.id)
+            if row.active_substage == "ai" or row.phase in {
+                MissionPhase.AI_COMPLETE,
+                MissionPhase.COMPLETED,
+            }:
+                raise RuntimeError("mission prompt is frozen after AI analysis starts")
+            row.command_json = command.model_dump_json()
+            row.updated_at = now_utc()
 
     async def active_mission_for_scenario(self, scenario_id: str) -> str | None:
         async with self.session() as session:
@@ -704,5 +910,105 @@ class Repository:
                         path=path,
                         sha256=sha256,
                         metadata_json=json.dumps(metadata),
+                    )
+                )
+
+    async def list_scenes(self) -> list[dict[str, Any]]:
+        async with self.session() as session:
+            rows = (
+                await session.scalars(select(SceneRow).order_by(SceneRow.created_at.desc()))
+            ).all()
+            return [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "path": row.path,
+                    "sha256": row.sha256,
+                    "metadata": json.loads(row.metadata_json),
+                    "created_at": row.created_at,
+                }
+                for row in rows
+            ]
+
+    async def get_scene(self, scene_id: str) -> dict[str, Any] | None:
+        async with self.session() as session:
+            row = await session.get(SceneRow, scene_id)
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "name": row.name,
+                "path": row.path,
+                "sha256": row.sha256,
+                "metadata": json.loads(row.metadata_json),
+                "created_at": row.created_at,
+            }
+
+    async def add_processor(self, processor: ProcessorVersion) -> ProcessorVersion:
+        async with self.session() as session:
+            existing = await session.scalar(
+                select(ProcessorVersionRow).where(ProcessorVersionRow.sha256 == processor.sha256)
+            )
+            if existing:
+                return ProcessorVersion.model_validate_json(existing.version_json)
+            session.add(
+                ProcessorVersionRow(
+                    id=processor.id,
+                    definition_id=processor.definition.id,
+                    stage=processor.definition.stage,
+                    sha256=processor.sha256,
+                    version_json=processor.model_dump_json(),
+                )
+            )
+        return processor
+
+    async def list_processors(self, stage: str | None = None) -> list[ProcessorVersion]:
+        async with self.session() as session:
+            query = select(ProcessorVersionRow).order_by(ProcessorVersionRow.created_at.desc())
+            if stage:
+                query = query.where(ProcessorVersionRow.stage == stage)
+            rows = (await session.scalars(query)).all()
+            return [ProcessorVersion.model_validate_json(row.version_json) for row in rows]
+
+    async def get_processor(self, processor_id: str) -> ProcessorVersion | None:
+        async with self.session() as session:
+            row = await session.get(ProcessorVersionRow, processor_id)
+            return ProcessorVersion.model_validate_json(row.version_json) if row else None
+
+    async def add_processor_execution(self, execution: ProcessorExecution) -> None:
+        async with self.session() as session:
+            session.add(
+                ProcessorExecutionRow(
+                    id=execution.id,
+                    mission_id=execution.mission_id,
+                    processor_id=execution.processor_id,
+                    stage=execution.stage,
+                    status=execution.status,
+                    execution_json=execution.model_dump_json(),
+                )
+            )
+
+    async def update_processor_execution(self, execution: ProcessorExecution) -> None:
+        async with self.session() as session:
+            row = await session.get(ProcessorExecutionRow, execution.id)
+            if row:
+                row.status = execution.status
+                row.execution_json = execution.model_dump_json()
+
+    async def upsert_processor_execution(self, execution: ProcessorExecution) -> None:
+        async with self.session() as session:
+            row = await session.get(ProcessorExecutionRow, execution.id)
+            if row:
+                row.status = execution.status
+                row.execution_json = execution.model_dump_json()
+            else:
+                session.add(
+                    ProcessorExecutionRow(
+                        id=execution.id,
+                        mission_id=execution.mission_id,
+                        processor_id=execution.processor_id,
+                        stage=execution.stage,
+                        status=execution.status,
+                        execution_json=execution.model_dump_json(),
                     )
                 )

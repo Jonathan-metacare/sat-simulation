@@ -6,6 +6,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deployJetson, discoverJetsonHostKey, preflightJetson } from "./jetson-deployment.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const webDirectory = path.resolve(directory, "..");
@@ -16,6 +17,7 @@ const defaultSettings = {
   activeAiMode: "yolo",
   activeScenarioId: "scenario-demo-beijing",
   cesiumIonToken: "",
+  keeptrackApiKey: "",
   // A provider is an optional external integration.  Do not probe a local
   // Ollama endpoint until the user explicitly configures and enables LLM.
   llmApiUrl: "",
@@ -25,6 +27,18 @@ const defaultSettings = {
   yoloModel: "default",
   yoloApiKey: "",
   providerTimeoutSeconds: 30,
+  gpuMode: "jetson",
+  jetsonHost: "",
+  jetsonSshUsername: "",
+  jetsonSshPassword: "",
+  jetsonHostKeyFingerprint: "",
+  jetsonDeploymentStatus: "unconfigured",
+  jetsonDeploymentVersion: "",
+  jetsonDeploymentError: "",
+  jetsonApiPort: 8002,
+  jetsonGtxPort: 9101,
+  desktopAdvertiseHost: "",
+  platformGtxResultPort: 9102,
 };
 
 let mainWindow;
@@ -32,6 +46,8 @@ let runtime;
 let settings = { ...defaultSettings };
 let ipcRegistered = false;
 let isQuitting = false;
+let resetInProgress = false;
+let jetsonDeploymentInProgress = false;
 const processes = new Map();
 // LaunchServices returns immediately for packaged service agents.  Retain the
 // exact role-and-port identity separately so they can still be stopped later
@@ -54,7 +70,7 @@ async function loadSettings() {
   await fsp.mkdir(path.dirname(locations.settings), { recursive: true });
   try {
     const loaded = JSON.parse(await fsp.readFile(locations.settings, "utf8"));
-    settings = { ...defaultSettings, ...loaded };
+    settings = cleanSettings({ ...defaultSettings, ...loaded });
   } catch (error) {
     if (error.code !== "ENOENT") console.warn("Could not read desktop settings", error);
   }
@@ -63,16 +79,61 @@ async function loadSettings() {
 function cleanSettings(value) {
   const text = (field) => typeof value?.[field] === "string" ? value[field].trim() : defaultSettings[field];
   const timeout = Number(value?.providerTimeoutSeconds);
+  const port = (field, fallback) => {
+    const candidate = Number(value?.[field]);
+    return Number.isInteger(candidate) && candidate >= 1 && candidate <= 65535 ? candidate : fallback;
+  };
   return {
     locale: value?.locale === "en" ? "en" : "zh",
     theme: value?.theme === "light" ? "light" : "dark",
     activeAiMode: value?.activeAiMode === "llm" ? "llm" : "yolo",
     activeScenarioId: text("activeScenarioId"),
     cesiumIonToken: text("cesiumIonToken"),
+    keeptrackApiKey: text("keeptrackApiKey"),
     llmApiUrl: text("llmApiUrl"), llmModel: text("llmModel"), llmApiKey: text("llmApiKey"),
     yoloApiUrl: text("yoloApiUrl"), yoloModel: text("yoloModel") || "default", yoloApiKey: text("yoloApiKey"),
     providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600 ? timeout : 30,
+    gpuMode: value?.gpuMode === "local" && localGpuAllowed() ? "local" : "jetson",
+    jetsonHost: text("jetsonHost"),
+    jetsonSshUsername: text("jetsonSshUsername"),
+    jetsonSshPassword: text("jetsonSshPassword"),
+    jetsonHostKeyFingerprint: text("jetsonHostKeyFingerprint"),
+    jetsonDeploymentStatus: ["unconfigured", "pending", "deploying", "ready", "failed"].includes(value?.jetsonDeploymentStatus) ? value.jetsonDeploymentStatus : "unconfigured",
+    jetsonDeploymentVersion: text("jetsonDeploymentVersion"),
+    jetsonDeploymentError: text("jetsonDeploymentError"),
+    jetsonApiPort: port("jetsonApiPort", 8002),
+    jetsonGtxPort: port("jetsonGtxPort", 9101),
+    desktopAdvertiseHost: text("desktopAdvertiseHost"),
+    platformGtxResultPort: port("platformGtxResultPort", 9102),
   };
+}
+
+function localGpuAllowed() {
+  return !app.isPackaged || process.env.SAT_SIM_DEVELOPER_MODE === "1";
+}
+
+function bundledJetsonPayload(version) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "jetson-payload")
+    : path.join(projectDirectory, "release", `jetson-${version}-linux-arm64`);
+}
+
+function jetsonConnection(credentials) {
+  if (!settings.jetsonHost || !settings.jetsonSshUsername) throw new Error("Save Jetson host and SSH username first");
+  const password = typeof credentials?.password === "string" && credentials.password
+    ? credentials.password
+    : settings.jetsonSshPassword;
+  if (!password) throw new Error("Save a Jetson SSH password first");
+  return {
+    host: settings.jetsonHost,
+    username: settings.jetsonSshUsername,
+    password,
+    expectedFingerprint: settings.jetsonHostKeyFingerprint || undefined,
+  };
+}
+
+function sendJetsonProgress(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("desktop:jetson:progress", payload);
 }
 
 async function saveSettings(value) {
@@ -97,7 +158,7 @@ async function availablePort() {
 }
 
 async function allocatePorts() {
-  const names = ["ground", "platform", "gpu", "downlink", "uplink", "gtx", "gtxResult", "web"];
+  const names = ["ground", "platform", "optical", "gpu", "downlink", "uplink", "gtx", "gtxResult", "payload", "payloadResult", "web"];
   const ports = {};
   for (const name of names) ports[name] = await availablePort();
   return ports;
@@ -111,6 +172,8 @@ function appendLog(name, chunk) {
 function sharedEnvironment() {
   const { root, database } = runtimeDirectories();
   const ports = runtime.ports;
+  const remoteGpu = settings.gpuMode === "jetson";
+  const jetsonHttp = `http://${settings.jetsonHost}:${settings.jetsonApiPort}`;
   return {
     ...process.env,
     SAT_SIM_HOST: "127.0.0.1",
@@ -120,17 +183,28 @@ function sharedEnvironment() {
     SAT_SIM_GROUND_API_PORT: String(ports.ground),
     SAT_SIM_PLATFORM_API_PORT: String(ports.platform),
     SAT_SIM_GPU_API_PORT: String(ports.gpu),
+    SAT_SIM_OPTICAL_API_PORT: String(ports.optical),
     SAT_SIM_GROUND_DOWNLINK_HOST: "127.0.0.1",
     SAT_SIM_GROUND_DOWNLINK_PORT: String(ports.downlink),
     SAT_SIM_PLATFORM_UPLINK_HOST: "127.0.0.1",
     SAT_SIM_PLATFORM_UPLINK_PORT: String(ports.uplink),
-    SAT_SIM_GPU_GTX_HOST: "127.0.0.1",
-    SAT_SIM_GPU_GTX_PORT: String(ports.gtx),
+    SAT_SIM_GPU_GTX_HOST: remoteGpu ? settings.jetsonHost : "127.0.0.1",
+    SAT_SIM_GPU_GTX_PORT: String(remoteGpu ? settings.jetsonGtxPort : ports.gtx),
     SAT_SIM_PLATFORM_GTX_RESULT_HOST: "127.0.0.1",
-    SAT_SIM_PLATFORM_GTX_RESULT_PORT: String(ports.gtxResult),
+    SAT_SIM_PLATFORM_GTX_RESULT_PORT: String(remoteGpu ? settings.platformGtxResultPort : ports.gtxResult),
+    SAT_SIM_PLATFORM_GTX_RESULT_BIND_HOST: remoteGpu ? "0.0.0.0" : "127.0.0.1",
+    SAT_SIM_PLATFORM_GTX_RESULT_ADVERTISE_HOST: remoteGpu ? settings.desktopAdvertiseHost : "127.0.0.1",
+    SAT_SIM_OPTICAL_PAYLOAD_HOST: "127.0.0.1",
+    SAT_SIM_OPTICAL_PAYLOAD_PORT: String(ports.payload),
+    SAT_SIM_PLATFORM_PAYLOAD_RESULT_HOST: "127.0.0.1",
+    SAT_SIM_PLATFORM_PAYLOAD_RESULT_PORT: String(ports.payloadResult),
     SAT_SIM_PLATFORM_HTTP_URL: `http://127.0.0.1:${ports.platform}`,
-    SAT_SIM_GPU_HTTP_URL: `http://127.0.0.1:${ports.gpu}`,
+    SAT_SIM_GPU_HTTP_URL: remoteGpu ? jetsonHttp : `http://127.0.0.1:${ports.gpu}`,
     SAT_SIM_GROUND_HTTP_URL: `http://127.0.0.1:${ports.ground}`,
+    SAT_SIM_OPTICAL_HTTP_URL: `http://127.0.0.1:${ports.optical}`,
+    // Desktop custom processors use the application-managed macOS sandbox.
+    // A non-macOS build fails closed instead of silently using host Python.
+    SAT_SIM_OCI_RUNTIME: "desktop-sandbox",
     SAT_SIM_LLM_API_URL: settings.activeAiMode === "llm" ? settings.llmApiUrl : "",
     SAT_SIM_LLM_MODEL: settings.llmModel,
     SAT_SIM_LLM_API_KEY: settings.activeAiMode === "llm" ? settings.llmApiKey : "",
@@ -138,6 +212,7 @@ function sharedEnvironment() {
     SAT_SIM_YOLO_MODEL: settings.yoloModel,
     SAT_SIM_YOLO_API_KEY: settings.activeAiMode === "yolo" ? settings.yoloApiKey : "",
     SAT_SIM_PROVIDER_TIMEOUT_SECONDS: String(settings.providerTimeoutSeconds),
+    SAT_SIM_KEEPTRACK_API_KEY: settings.keeptrackApiKey,
   };
 }
 
@@ -215,6 +290,25 @@ function startService(name, port) {
   );
 }
 
+function runDesktopUtility(name) {
+  const executable = serviceCommand();
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable.command, [...executable.prefix, name], {
+      cwd: projectDirectory,
+      env: sharedEnvironment(),
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.on("data", (value) => appendLog("desktop", `[${name}] ${value}`));
+    child.stderr.on("data", (value) => appendLog("desktop", `[${name}] ${value}`));
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${name} failed (code=${code ?? "null"}, signal=${signal ?? "none"})`));
+    });
+  });
+}
+
 function startWeb() {
   const environment = {
     ...sharedEnvironment(),
@@ -239,6 +333,11 @@ async function restartWeb() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
   }
+}
+
+async function loadCurrentWeb(query = "") {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}${query}`);
 }
 
 async function waitFor(url, name, timeout = 90000) {
@@ -309,7 +408,7 @@ async function stopProcess(name) {
 }
 
 async function stopStack() {
-  for (const name of ["web", "ground", "platform", "gpu"]) await stopProcess(name);
+  for (const name of ["web", "ground", "platform", "optical", "gpu"]) await stopProcess(name);
 }
 
 async function startStack() {
@@ -320,12 +419,14 @@ async function startStack() {
   // All simulation nodes are independent at boot.  Start their frozen Python
   // runtimes together: the first import of Rasterio/GDAL can take tens of
   // seconds on macOS, but it must not serialize the whole desktop startup.
-  startService("gpu", runtime.ports.gpu);
+  if (settings.gpuMode === "local") startService("gpu", runtime.ports.gpu);
+  startService("optical", runtime.ports.optical);
   startService("platform", runtime.ports.platform);
   startService("ground", runtime.ports.ground);
   await Promise.all([
-    waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务"),
+    ...(settings.gpuMode === "local" ? [waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务")] : []),
     waitFor(`http://127.0.0.1:${runtime.ports.platform}/health`, "星务平台服务"),
+    waitFor(`http://127.0.0.1:${runtime.ports.optical}/health`, "光学载荷服务"),
     waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务"),
   ]);
   startWeb();
@@ -340,8 +441,58 @@ function diagnostics() {
     ports: runtime?.ports ?? {},
     dataDirectory: locations.root,
     logDirectory: locations.logs,
-    services: ["gpu", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: processes.has(name) })),
+    services: ["gpu", "optical", "platform", "ground", "web"].map((name) => ({ name, version: app.getVersion(), running: name === "gpu" && settings.gpuMode === "jetson" ? false : processes.has(name) })),
   };
+}
+
+const resetActions = new Set(["simulation-data", "catalog-caches", "settings-defaults"]);
+
+async function resetLocalData(rawAction, rawConfirmation) {
+  const action = String(rawAction ?? "");
+  const confirmation = String(rawConfirmation ?? "");
+  if (!resetActions.has(action)) throw new Error("Unsupported reset action");
+  if ((action === "simulation-data" || action === "settings-defaults") && confirmation !== "RESET") {
+    throw new Error("Type RESET to confirm this reset");
+  }
+  if (resetInProgress) throw new Error("A data reset is already in progress");
+
+  resetInProgress = true;
+  let actionError;
+  try {
+    await stopStack();
+    const locations = runtimeDirectories();
+    if (action === "simulation-data") {
+      // `root` is derived solely from Electron's userData directory.  Never
+      // accept a path from IPC, even for this user-authorized permanent reset.
+      await fsp.rm(locations.root, { recursive: true, force: true });
+      await saveSettings({ ...settings, activeScenarioId: defaultSettings.activeScenarioId });
+    } else if (action === "catalog-caches") {
+      await runDesktopUtility("reset-catalog-caches");
+    } else {
+      await fsp.rm(locations.settings, { force: true });
+      settings = { ...defaultSettings };
+    }
+  } catch (error) {
+    actionError = error;
+  }
+
+  try {
+    await startStack();
+    // A full stack restart allocates new localhost ports.  The existing
+    // renderer otherwise keeps polling the now-closed Ground port.
+    await loadCurrentWeb();
+  } catch (restartError) {
+    const detail = restartError instanceof Error ? restartError.message : String(restartError);
+    if (actionError) {
+      const original = actionError instanceof Error ? actionError.message : String(actionError);
+      throw new Error(`${original}; service restart also failed: ${detail}. Logs: ${runtimeDirectories().logs}`);
+    }
+    throw new Error(`Reset completed but services could not restart: ${detail}. Logs: ${runtimeDirectories().logs}`);
+  } finally {
+    resetInProgress = false;
+  }
+  if (actionError) throw actionError;
+  return { action, settings, diagnostics: diagnostics() };
 }
 
 function registerExternalHandler() {
@@ -366,11 +517,68 @@ function registerIpc() {
   ipcRegistered = true;
   ipcMain.on("desktop:api-base", (event) => { event.returnValue = runtime?.apiBase ?? "http://127.0.0.1:8000/api"; });
   ipcMain.handle("desktop:settings:get", () => settings);
+  ipcMain.handle("desktop:capabilities", () => ({ localGpuAllowed: localGpuAllowed() }));
+  ipcMain.handle("desktop:jetson:discover-host-key", async (_event, credentials) => {
+    const connection = jetsonConnection(credentials);
+    return { fingerprint: await discoverJetsonHostKey(connection) };
+  });
+  ipcMain.handle("desktop:jetson:confirm-host-key", async (_event, fingerprint) => {
+    if (!/^SHA256:[A-Za-z0-9+/=]+$/.test(String(fingerprint))) throw new Error("Invalid Jetson host key fingerprint");
+    await saveSettings({ ...settings, jetsonHostKeyFingerprint: String(fingerprint), jetsonDeploymentStatus: "pending", jetsonDeploymentError: "" });
+    return settings;
+  });
+  ipcMain.handle("desktop:jetson:preflight", async (_event, credentials) => {
+    const connection = jetsonConnection(credentials);
+    if (!connection.expectedFingerprint) throw new Error("Confirm the Jetson host key before running preflight");
+    return preflightJetson(connection, (message) => sendJetsonProgress({ type: "log", message }));
+  });
+  ipcMain.handle("desktop:jetson:deploy", async (_event, request) => {
+    if (jetsonDeploymentInProgress) throw new Error("A Jetson deployment is already running");
+    const connection = jetsonConnection(request?.credentials);
+    if (!connection.expectedFingerprint) throw new Error("Confirm the Jetson host key before deployment");
+    if (!["application", "initialize"].includes(request?.mode)) throw new Error("Unsupported Jetson deployment mode");
+    jetsonDeploymentInProgress = true;
+    await saveSettings({ ...settings, jetsonDeploymentStatus: "deploying", jetsonDeploymentError: "" });
+    try {
+      const result = await deployJetson({
+        connection, version: app.getVersion(), mode: request.mode,
+        model: settings.llmModel, timeoutSeconds: settings.providerTimeoutSeconds,
+        callbackHost: settings.desktopAdvertiseHost, callbackPort: settings.platformGtxResultPort,
+        payloadPath: bundledJetsonPayload(app.getVersion()),
+      }, sendJetsonProgress);
+      await saveSettings({ ...settings, jetsonDeploymentStatus: "ready", jetsonDeploymentVersion: result.version, jetsonDeploymentError: "" });
+      return settings;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await saveSettings({ ...settings, jetsonDeploymentStatus: "failed", jetsonDeploymentError: message });
+      sendJetsonProgress({ type: "error", message });
+      throw error;
+    } finally { jetsonDeploymentInProgress = false; }
+  });
+  ipcMain.handle("desktop:data:reset", async (_event, action, confirmation) => resetLocalData(action, confirmation));
   ipcMain.handle("desktop:settings:save", async (_event, value) => {
     const prior = settings;
-    const saved = await saveSettings(value);
+    let saved = await saveSettings(value);
     const providerChanged = ["activeAiMode", "llmApiUrl", "llmModel", "llmApiKey", "yoloApiUrl", "yoloModel", "yoloApiKey", "providerTimeoutSeconds"].some((key) => prior[key] !== saved[key]);
-    if (providerChanged) {
+    const connectionChanged = ["gpuMode", "jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
+    const hostIdentityChanged = prior.jetsonHost !== saved.jetsonHost || prior.jetsonSshUsername !== saved.jetsonSshUsername;
+    const keeptrackChanged = prior.keeptrackApiKey !== saved.keeptrackApiKey;
+    if (saved.gpuMode === "jetson" && (!saved.jetsonHost || !saved.desktopAdvertiseHost)) {
+      throw new Error("Jetson 模式需要填写 Jetson 地址和桌面可访问的 LAN 地址");
+    }
+    if (saved.gpuMode === "jetson" && connectionChanged) {
+      saved = await saveSettings({
+        ...saved, jetsonDeploymentStatus: "pending", jetsonDeploymentError: "",
+        jetsonHostKeyFingerprint: hostIdentityChanged ? "" : saved.jetsonHostKeyFingerprint,
+      });
+    }
+    if (connectionChanged) {
+      await stopStack(); await startStack(); await loadCurrentWeb(saved.gpuMode === "jetson" ? "?jetsonDeployment=1" : "");
+    } else if (keeptrackChanged) {
+      await stopProcess("ground");
+      startService("ground", runtime.ports.ground);
+      await waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务");
+    } else if (providerChanged && saved.gpuMode === "local") {
       await stopProcess("gpu");
       startService("gpu", runtime.ports.gpu);
       await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
@@ -380,11 +588,15 @@ function registerIpc() {
   });
   ipcMain.handle("desktop:diagnostics", () => diagnostics());
   ipcMain.handle("desktop:gpu:restart", async () => {
+    if (settings.gpuMode === "jetson") {
+      await waitFor(`http://${settings.jetsonHost}:${settings.jetsonApiPort}/health`, "Jetson GPU 服务", 5000);
+      return diagnostics();
+    }
     await stopProcess("gpu"); startService("gpu", runtime.ports.gpu);
     await waitFor(`http://127.0.0.1:${runtime.ports.gpu}/health`, "GPU 服务");
     return diagnostics();
   });
-  ipcMain.handle("desktop:stack:restart", async () => { await stopStack(); await startStack(); return diagnostics(); });
+  ipcMain.handle("desktop:stack:restart", async () => { await stopStack(); await startStack(); await loadCurrentWeb(); return diagnostics(); });
   ipcMain.handle("desktop:open-data-directory", () => shell.openPath(runtimeDirectories().root));
   ipcMain.handle("desktop:open-log-directory", () => shell.openPath(runtimeDirectories().logs));
 }
@@ -409,23 +621,26 @@ async function bootstrap() {
       contextIsolation: true, nodeIntegration: false, sandbox: false,
     },
   });
+  if (!app.isPackaged) {
+    mainWindow.webContents.openDevTools({ mode: "detach" });
+  }
   // This app is distributed as an unsigned DMG and may be upgraded by
   // replacing the .app bundle while keeping Electron's user-data directory.
   // Next marks hashed chunks immutable, so a cached 404 from an older bundle
   // can otherwise prevent dynamic Cesium chunks from ever loading.
   await mainWindow.webContents.session.clearCache();
-  mainWindow.webContents.on("console-message", (_event, _level, message) => {
-    appendLog("desktop", `[renderer] ${message}\n`);
+  mainWindow.webContents.on("console-message", (_event, details) => {
+    appendLog("desktop", `[renderer] ${details.message}\n`);
   });
   mainWindow.webContents.on("did-finish-load", () => {
     void mainWindow.webContents.executeJavaScript(
       "typeof window.satSimDesktop",
     ).then((result) => appendLog("desktop", `[bridge] satSimDesktop=${result}\n`));
   });
-  await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>正在启动 SpaceZenith-Sim…</body>");
+  await mainWindow.loadURL("data:text/html;charset=utf-8,<body style='background:%23010810;color:%23bcefff;font-family:-apple-system;padding:36px'>Launching…</body>");
   try {
     await startStack();
-    await mainWindow.loadURL(`http://127.0.0.1:${runtime.ports.web}`);
+    await loadCurrentWeb();
   } catch (error) {
     appendLog("desktop", `[startup failed] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
     await stopStack();
