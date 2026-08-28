@@ -137,7 +137,7 @@ export async function deployJetson({ connection, version, mode, model, timeoutSe
   if (!/^[A-Za-z0-9._-]+$/.test(String(version))) throw new Error("Jetson release version is invalid");
   if (!/^[a-zA-Z0-9.-]+$/.test(String(callbackHost)) || !Number.isInteger(Number(callbackPort))) throw new Error("Invalid desktop callback address");
   const safeModel = isSafeOllamaModel(model) ? model : "";
-  const safeTimeout = Math.max(1, Math.min(600, Number(timeoutSeconds) || 120));
+  const safeTimeout = Math.max(1, Math.min(600, Number(timeoutSeconds) || 300));
   stage("prepare-payload");
   const payload = await readPayload(payloadPath, version);
   const releasePath = `/opt/spacezenith-sim/releases/${version}`;

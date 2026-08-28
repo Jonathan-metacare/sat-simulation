@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -21,10 +21,11 @@ const defaultSettings = {
   cesiumIonToken: "",
   keeptrackApiKey: "",
   llmModel: "",
-  providerTimeoutSeconds: 30,
+  providerTimeoutSeconds: 300,
   gpuMode: "jetson",
   jetsonHost: "",
   jetsonSshUsername: "",
+  jetsonSshPasswordEncrypted: "",
   jetsonHostKeyFingerprint: "",
   jetsonDeploymentStatus: "unconfigured",
   jetsonDeploymentVersion: "",
@@ -85,11 +86,16 @@ function cleanSettings(value) {
     cesiumIonToken: text("cesiumIonToken"),
     keeptrackApiKey: text("keeptrackApiKey"),
     llmModel: text("llmModel"),
-    providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600 ? timeout : 30,
+    // Migrate the former 30-second desktop default while preserving every
+    // explicit non-default value the user may already have chosen.
+    providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600
+      ? (timeout === 30 ? 300 : timeout)
+      : 300,
     // Normalize legacy Local GPU preferences to the only supported Jetson mode.
     gpuMode: "jetson",
     jetsonHost: text("jetsonHost"),
     jetsonSshUsername: text("jetsonSshUsername"),
+    jetsonSshPasswordEncrypted: text("jetsonSshPasswordEncrypted"),
     jetsonHostKeyFingerprint: text("jetsonHostKeyFingerprint"),
     jetsonDeploymentStatus: ["unconfigured", "pending", "deploying", "ready", "failed"].includes(value?.jetsonDeploymentStatus) ? value.jetsonDeploymentStatus : "unconfigured",
     jetsonDeploymentVersion: text("jetsonDeploymentVersion"),
@@ -99,6 +105,32 @@ function cleanSettings(value) {
     desktopAdvertiseHost: text("desktopAdvertiseHost"),
     platformGtxResultPort: port("platformGtxResultPort", 9102),
   };
+}
+
+function publicSettings() {
+  const { jetsonSshPasswordEncrypted: _jetsonSshPasswordEncrypted, ...result } = settings;
+  return result;
+}
+
+function storedJetsonPassword() {
+  if (!settings.jetsonSshPasswordEncrypted) return "";
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure credential storage is unavailable on this system");
+  try {
+    return safeStorage.decryptString(Buffer.from(settings.jetsonSshPasswordEncrypted, "base64"));
+  } catch {
+    return "";
+  }
+}
+
+function encryptedJetsonPassword(rawPassword) {
+  const password = typeof rawPassword === "string" ? rawPassword : "";
+  if (password.length > 1024) throw new Error("Jetson SSH password is too long");
+  if (password && !safeStorage.isEncryptionAvailable()) throw new Error("Secure credential storage is unavailable on this system");
+  return password ? safeStorage.encryptString(password).toString("base64") : "";
+}
+
+async function saveJetsonPassword(rawPassword) {
+  await saveSettings({ ...settings, jetsonSshPasswordEncrypted: encryptedJetsonPassword(rawPassword) });
 }
 
 function bundledJetsonPayload(version) {
@@ -498,7 +530,11 @@ function registerIpc() {
   if (ipcRegistered) return;
   ipcRegistered = true;
   ipcMain.on("desktop:api-base", (event) => { event.returnValue = runtime?.apiBase ?? "http://127.0.0.1:8000/api"; });
-  ipcMain.handle("desktop:settings:get", () => settings);
+  ipcMain.handle("desktop:settings:get", () => publicSettings());
+  ipcMain.handle("desktop:jetson:password:get", () => storedJetsonPassword());
+  ipcMain.handle("desktop:jetson:password:save", async (_event, password) => {
+    await saveJetsonPassword(password);
+  });
   ipcMain.handle("desktop:jetson:discover-host-key", async (_event, credentials) => {
     const connection = jetsonConnection(credentials);
     return { fingerprint: await discoverJetsonHostKey(connection) };
@@ -506,7 +542,7 @@ function registerIpc() {
   ipcMain.handle("desktop:jetson:confirm-host-key", async (_event, fingerprint) => {
     if (!/^SHA256:[A-Za-z0-9+/=]+$/.test(String(fingerprint))) throw new Error("Invalid Jetson host key fingerprint");
     await saveSettings({ ...settings, jetsonHostKeyFingerprint: String(fingerprint), jetsonDeploymentStatus: "pending", jetsonDeploymentError: "" });
-    return settings;
+    return publicSettings();
   });
   ipcMain.handle("desktop:jetson:preflight", async (_event, credentials) => {
     const connection = jetsonConnection(credentials);
@@ -528,7 +564,7 @@ function registerIpc() {
         payloadPath: bundledJetsonPayload(desktopVersion),
       }, sendJetsonProgress);
       await saveSettings({ ...settings, jetsonDeploymentStatus: "ready", jetsonDeploymentVersion: result.version, jetsonDeploymentError: "" });
-      return settings;
+      return publicSettings();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await saveSettings({ ...settings, jetsonDeploymentStatus: "failed", jetsonDeploymentError: message });
@@ -544,7 +580,7 @@ function registerIpc() {
     try {
       const result = await pullJetsonOllamaModel({ connection, model: String(request?.model || "") }, sendJetsonProgress);
       await saveSettings({ ...settings, llmModel: result.model });
-      return { settings, model: result.model };
+      return { settings: publicSettings(), model: result.model };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       sendJetsonProgress({ type: "error", message });
@@ -552,9 +588,12 @@ function registerIpc() {
     } finally { jetsonDeploymentInProgress = false; }
   });
   ipcMain.handle("desktop:data:reset", async (_event, action, confirmation) => resetLocalData(action, confirmation));
-  ipcMain.handle("desktop:settings:save", async (_event, value) => {
+  ipcMain.handle("desktop:settings:save", async (_event, value, jetsonPassword) => {
     const prior = settings;
-    let saved = await saveSettings(value);
+    const passwordPatch = typeof jetsonPassword === "string"
+      ? { jetsonSshPasswordEncrypted: encryptedJetsonPassword(jetsonPassword) }
+      : {};
+    let saved = await saveSettings({ ...settings, ...value, ...passwordPatch });
     const connectionChanged = ["jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
     const hostIdentityChanged = prior.jetsonHost !== saved.jetsonHost || prior.jetsonSshUsername !== saved.jetsonSshUsername;
     const keeptrackChanged = prior.keeptrackApiKey !== saved.keeptrackApiKey;
@@ -575,7 +614,7 @@ function registerIpc() {
       await waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务");
     }
     if (prior.cesiumIonToken !== saved.cesiumIonToken) await restartWeb();
-    return saved;
+    return publicSettings();
   });
   ipcMain.handle("desktop:diagnostics", () => diagnostics());
   ipcMain.handle("desktop:stack:restart", async () => { await stopStack(); await startStack(); await loadCurrentWeb(); return diagnostics(); });

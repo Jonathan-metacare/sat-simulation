@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4.1-mini"
     llm_api_key: str | None = None
     llm_require_vision: bool = False
-    provider_timeout_seconds: float = 80
+    provider_timeout_seconds: float = 300
     stage_animation_seconds: float = 8.0
     keeptrack_api_key: str | None = None
     keeptrack_api_url: str = "https://api.keeptrack.space/v4/sat/{norad}/omm"

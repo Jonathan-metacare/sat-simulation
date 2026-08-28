@@ -40,7 +40,9 @@ export type DesktopResetResult = {
 export type DesktopBridge = {
   apiBase: string;
   getSettings(): Promise<DesktopSettings>;
-  saveSettings(value: DesktopSettings): Promise<DesktopSettings>;
+  saveSettings(value: DesktopSettings, jetsonPassword?: string): Promise<DesktopSettings>;
+  getJetsonPassword(): Promise<string>;
+  saveJetsonPassword(password: string): Promise<void>;
   resetData(action: DesktopResetAction, confirmation?: string): Promise<DesktopResetResult>;
   diagnostics(): Promise<DesktopDiagnostics>;
   restartStack(): Promise<DesktopDiagnostics>;

@@ -3,7 +3,9 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("satSimDesktop", {
   apiBase: ipcRenderer.sendSync("desktop:api-base"),
   getSettings: () => ipcRenderer.invoke("desktop:settings:get"),
-  saveSettings: (value) => ipcRenderer.invoke("desktop:settings:save", value),
+  saveSettings: (value, jetsonPassword) => ipcRenderer.invoke("desktop:settings:save", value, jetsonPassword),
+  getJetsonPassword: () => ipcRenderer.invoke("desktop:jetson:password:get"),
+  saveJetsonPassword: (password) => ipcRenderer.invoke("desktop:jetson:password:save", password),
   resetData: (action, confirmation) => ipcRenderer.invoke("desktop:data:reset", action, confirmation),
   diagnostics: () => ipcRenderer.invoke("desktop:diagnostics"),
   restartStack: () => ipcRenderer.invoke("desktop:stack:restart"),

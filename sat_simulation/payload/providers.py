@@ -93,7 +93,18 @@ class OpenAICompatibleLanguageProvider:
             response = await client.post(
                 f"{self.url}/v1/chat/completions", headers=headers, json=payload
             )
-            response.raise_for_status()
+            if response.is_error:
+                # Ollama's OpenAI-compatible endpoint provides the actionable
+                # cause (for example, model load or memory failure) in its
+                # response body. Preserve a bounded, plain-text excerpt so it
+                # reaches the desktop task error without exposing request data.
+                detail = response.text.strip().replace("\n", " ")[:1_000]
+                suffix = f": {detail}" if detail else ""
+                raise httpx.HTTPStatusError(
+                    f"Ollama returned {response.status_code}{suffix}",
+                    request=response.request,
+                    response=response,
+                )
         body = response.json()
         choice = body["choices"][0]
         content = choice["message"]["content"]
