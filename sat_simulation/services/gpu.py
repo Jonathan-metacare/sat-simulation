@@ -51,9 +51,8 @@ from sat_simulation.optical.pipeline import (
     SensorConfig,
     sha256_file,
 )
-from sat_simulation.payload.providers import (
-    OpenAICompatibleLanguageProvider,
-)
+from sat_simulation.payload.agent import LangChainOllamaAgent, normalize_agent_configuration
+from sat_simulation.payload.providers import OpenAICompatibleLanguageProvider
 from sat_simulation.processors import ProcessorBlocked, ProcessorRunner, inspect_processor_bundle
 from sat_simulation.processors.templates import builtin_template, workspace_bundle
 
@@ -517,36 +516,55 @@ class GPUState:
                 raise ProviderBlocked("该历史 YOLO 任务已退役，只能查看既有结果，不能继续执行。")
             if not self.settings.llm_api_url:
                 raise ProviderBlocked("LLM 未配置：请设置 SAT_SIM_LLM_API_URL 后重试本步")
-            selected_model = str(request.get("ai_model") or self.settings.llm_model)
+            options = dict(request.get("options") or {})
+            agent_configuration = normalize_agent_configuration(options.get("agent"))
+            selected_model = str(
+                agent_configuration["model"]
+                if agent_configuration["enabled"] and agent_configuration["model"]
+                else request.get("ai_model") or self.settings.llm_model
+            )
             if self.settings.llm_require_vision:
                 if selected_model not in {model["name"] for model in await self.vision_models()}:
                     raise ProviderBlocked(f"LLM 模型不可用或不支持视觉：{selected_model}")
-            provider = OpenAICompatibleLanguageProvider(
-                self.settings.llm_api_url,
-                model=selected_model,
-                timeout=max(
-                    1.0,
-                    min(
-                        600.0,
-                        float(
-                            dict(request.get("options") or {}).get(
-                                "provider_timeout_seconds",
-                                self.settings.provider_timeout_seconds,
-                            )
-                        ),
+            timeout = max(
+                1.0,
+                min(
+                    600.0,
+                    float(
+                        options.get(
+                            "provider_timeout_seconds",
+                            self.settings.provider_timeout_seconds,
+                        )
                     ),
                 ),
-                api_key=self.settings.llm_api_key,
             )
-            model_result = await provider.analyze(
-                {
-                    "thumbnail_path": job["thumbnail_path"],
-                    "mission_id": mission_id,
-                    "mode": mode,
-                    **dict(request.get("options") or {}),
-                },
-                [manifest],
-            )
+            context = {
+                "thumbnail_path": job["thumbnail_path"],
+                "mission_id": mission_id,
+                "mode": mode,
+                **options,
+            }
+            if agent_configuration["enabled"]:
+                verified_products = [
+                    ProductManifest.model_validate(value)
+                    for value in dict(job.get("products") or {}).values()
+                ]
+                model_result = await LangChainOllamaAgent(
+                    self.settings.llm_api_url,
+                    model=selected_model,
+                    timeout=timeout,
+                    configuration=agent_configuration,
+                ).analyze(context, verified_products)
+            else:
+                # Preserve the established OpenAI-compatible Ollama request
+                # exactly when the opt-in Agent is disabled.
+                provider = OpenAICompatibleLanguageProvider(
+                    self.settings.llm_api_url,
+                    model=selected_model,
+                    timeout=timeout,
+                    api_key=self.settings.llm_api_key,
+                )
+                model_result = await provider.analyze(context, [manifest])
         except ProviderBlocked:
             raise
         except Exception as exc:

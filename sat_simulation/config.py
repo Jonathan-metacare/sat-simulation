@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -41,6 +43,13 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_require_vision: bool = False
     provider_timeout_seconds: float = 300
+    agent_enabled: bool = False
+    agent_model: str = ""
+    agent_system_prompt: str = (
+        "你是星载光学遥感图像分析助手。直接输出最终分析，不输出思考过程；"
+        "明确区分图像可见事实、结合元数据的推断和不确定性。"
+    )
+    agent_tools: str = "[]"
     stage_animation_seconds: float = 8.0
     keeptrack_api_key: str | None = None
     keeptrack_api_url: str = "https://api.keeptrack.space/v4/sat/{norad}/omm"
@@ -49,6 +58,22 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
+
+    @property
+    def agent_configuration(self) -> dict[str, Any]:
+        """Return the desktop-selected, wire-safe Agent configuration."""
+        try:
+            selected = json.loads(self.agent_tools)
+        except (TypeError, json.JSONDecodeError):
+            selected = []
+        allowed = {"mission_context", "verified_products", "l1b_metadata"}
+        tools = [item for item in selected if isinstance(item, str) and item in allowed]
+        return {
+            "enabled": self.agent_enabled,
+            "model": self.agent_model.strip()[:256],
+            "system_prompt": self.agent_system_prompt.strip(),
+            "tools": list(dict.fromkeys(tools)),
+        }
 
 
 settings = Settings()

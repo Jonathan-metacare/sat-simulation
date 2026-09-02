@@ -15,6 +15,10 @@ const emptySettings: DesktopSettings = {
   activeScenarioId: "scenario-demo-beijing",
   llmModel: "",
   providerTimeoutSeconds: 300,
+  agentEnabled: false,
+  agentModel: "",
+  agentSystemPrompt: "你是星载光学遥感图像分析助手。直接输出最终分析，不输出思考过程；明确区分图像可见事实、结合元数据的推断和不确定性。",
+  agentTools: [],
   gpuMode: "jetson", jetsonHost: "", jetsonSshUsername: "", jetsonHostKeyFingerprint: "", jetsonDeploymentStatus: "unconfigured", jetsonDeploymentVersion: "", jetsonDeploymentError: "", jetsonApiPort: 8002, jetsonGtxPort: 9101,
   desktopAdvertiseHost: "", platformGtxResultPort: 9102,
 };
@@ -29,15 +33,22 @@ function Field({ label, value, onChange, type = "text", placeholder }: {
   </label>;
 }
 
+function TextArea({ label, value, onChange }: { label: string; value: string; onChange(value: string): void }) {
+  return <label className="block text-xs text-slate-400">{label}
+    <textarea value={value} maxLength={4000} rows={7} onChange={(event) => onChange(event.target.value)} className="mt-1.5 w-full resize-y rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-300/45" />
+  </label>;
+}
+
 export function isDesktopApp() { return Boolean(desktopBridge()); }
 
-type SettingsSection = "general" | "plugins" | "ai" | "scene" | "data" | "about";
+type SettingsSection = "general" | "plugins" | "ai" | "agent" | "scene" | "data" | "about";
 
 function sectionTitle(section: SettingsSection, t: (key: Parameters<typeof translate>[1]) => string) {
   return ({
     general: t("sidebar.general"),
     plugins: t("sidebar.plugins"),
     ai: "AI",
+    agent: t("sidebar.agent"),
     scene: t("sidebar.scene"),
     data: t("sidebar.data"),
     about: t("sidebar.about"),
@@ -81,7 +92,7 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
     setSection(initialSection); setPendingReset(undefined); setResetConfirmation(""); setResetNotice(undefined);
   }, [initialSection, open]);
   useEffect(() => {
-    if (!open || section !== "ai") return;
+    if (!open || (section !== "ai" && section !== "agent")) return;
     void api.providerModels().then((result) => setVisionModels(result.models)).catch(() => setVisionModels([]));
   }, [open, section]);
   useEffect(() => {
@@ -174,7 +185,36 @@ export function DesktopSettingsPanel({ open, onClose, locale, onLocale, onTheme,
       {section === "about" && <div className="rounded-xl border border-white/[.07] bg-black/20 p-4 text-sm text-slate-300"><div className="text-cyan-200">{t("settings.softwareVersion")}</div><div className="mt-3 font-mono text-lg text-cyan-100">SIL ONLINE · v0.1.2</div><div className="mt-5 text-cyan-200">{t("settings.publisher")}</div><a href="https://www.spacezenith.ai" target="_blank" rel="noreferrer" onClick={(event) => { if (typeof bridge?.openExternal !== "function") return; event.preventDefault(); void bridge.openExternal("https://www.spacezenith.ai").catch(() => window.open("https://www.spacezenith.ai", "_blank", "noopener,noreferrer")); }} className="mt-2 inline-block text-left text-sm text-cyan-100 underline decoration-cyan-300/40 underline-offset-4 hover:text-cyan-300">www.spacezenith.ai</a></div>}
       {error && <p className="mt-4 rounded-lg border border-orange-300/25 bg-orange-300/10 px-3 py-2 text-xs text-orange-200">{error}</p>}
       {resetNotice && <p className="mt-4 rounded-lg border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-xs text-emerald-200">{resetNotice}</p>}
-      {section !== "data" && <div className="mt-5 flex flex-wrap justify-end gap-2">
+      {section !== "data" && section !== "agent" && <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <button disabled={working} onClick={() => void save()} className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-300/50 bg-cyan-300/15 px-3 py-2 text-xs text-cyan-100 disabled:opacity-50">{working && <LoaderCircle size={14} className="animate-spin" />}{t("settings.save")}</button>
+      </div>}
+      {section === "agent" && <div className="space-y-4">
+        <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/[.04] p-3">
+          <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-cyan-100">
+            <span><span className="block">{t("settings.agent.enabled")}</span><span className="mt-1 block text-xs text-slate-400">{t("settings.agent.enabledHint")}</span></span>
+            <input type="checkbox" checked={value.agentEnabled} onChange={(event) => {
+              const enabled = event.target.checked;
+              update("agentEnabled", enabled);
+              if (enabled && !value.agentModel && value.llmModel) update("agentModel", value.llmModel);
+            }} className="h-4 w-4 accent-cyan-300" />
+          </label>
+        </div>
+        <label className="block text-xs text-slate-400">{t("settings.agent.model")}
+          <select disabled={!value.agentEnabled} value={value.agentModel} onChange={(event) => update("agentModel", event.target.value)} className="mt-1.5 w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-100 disabled:opacity-50">
+            <option value="">{t("settings.agent.selectModel")}</option>
+            {visionModels.map((model) => <option key={model.name} value={model.name}>{model.name}</option>)}
+          </select>
+          <span className="mt-1 block text-[10px] text-slate-500">{t("settings.agent.modelHint")}</span>
+        </label>
+        <TextArea label={t("settings.agent.systemPrompt")} value={value.agentSystemPrompt} onChange={(next) => update("agentSystemPrompt", next)} />
+        <fieldset disabled={!value.agentEnabled} className="rounded-xl border border-white/10 p-3 disabled:opacity-50">
+          <legend className="px-1 text-sm text-cyan-100">{t("settings.agent.tools")}</legend>
+          <p className="mb-3 text-xs text-slate-400">{t("settings.agent.toolsHint")}</p>
+          {(["mission_context", "verified_products", "l1b_metadata"] as const).map((tool) => <label key={tool} className="mb-2 flex cursor-pointer items-start gap-2 text-xs text-slate-300 last:mb-0"><input type="checkbox" checked={value.agentTools.includes(tool)} onChange={(event) => update("agentTools", event.target.checked ? [...value.agentTools, tool] : value.agentTools.filter((item) => item !== tool))} className="mt-0.5 h-3.5 w-3.5 accent-cyan-300" /><span>{t(`settings.agent.tool.${tool}`)}</span></label>)}
+        </fieldset>
+        <p className="text-xs leading-5 text-slate-500">{t("settings.agent.restartHint")}</p>
+      </div>}
+      {section === "agent" && <div className="mt-5 flex flex-wrap justify-end gap-2">
         <button disabled={working} onClick={() => void save()} className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-300/50 bg-cyan-300/15 px-3 py-2 text-xs text-cyan-100 disabled:opacity-50">{working && <LoaderCircle size={14} className="animate-spin" />}{t("settings.save")}</button>
       </div>}
     </section>

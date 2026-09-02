@@ -22,6 +22,10 @@ const defaultSettings = {
   keeptrackApiKey: "",
   llmModel: "",
   providerTimeoutSeconds: 300,
+  agentEnabled: false,
+  agentModel: "",
+  agentSystemPrompt: "你是星载光学遥感图像分析助手。直接输出最终分析，不输出思考过程；明确区分图像可见事实、结合元数据的推断和不确定性。",
+  agentTools: [],
   gpuMode: "jetson",
   jetsonHost: "",
   jetsonSshUsername: "",
@@ -74,6 +78,9 @@ async function loadSettings() {
 function cleanSettings(value) {
   const text = (field) => typeof value?.[field] === "string" ? value[field].trim() : defaultSettings[field];
   const timeout = Number(value?.providerTimeoutSeconds);
+  const agentTools = Array.isArray(value?.agentTools)
+    ? [...new Set(value.agentTools.filter((item) => ["mission_context", "verified_products", "l1b_metadata"].includes(item)))]
+    : [];
   const port = (field, fallback) => {
     const candidate = Number(value?.[field]);
     return Number.isInteger(candidate) && candidate >= 1 && candidate <= 65535 ? candidate : fallback;
@@ -91,6 +98,10 @@ function cleanSettings(value) {
     providerTimeoutSeconds: Number.isFinite(timeout) && timeout >= 1 && timeout <= 600
       ? (timeout === 30 ? 300 : timeout)
       : 300,
+    agentEnabled: value?.agentEnabled === true,
+    agentModel: text("agentModel").slice(0, 256),
+    agentSystemPrompt: text("agentSystemPrompt").slice(0, 4000) || defaultSettings.agentSystemPrompt,
+    agentTools,
     // Normalize legacy Local GPU preferences to the only supported Jetson mode.
     gpuMode: "jetson",
     jetsonHost: text("jetsonHost"),
@@ -228,6 +239,10 @@ function sharedEnvironment() {
     // A non-macOS build fails closed instead of silently using host Python.
     SAT_SIM_OCI_RUNTIME: "desktop-sandbox",
     SAT_SIM_PROVIDER_TIMEOUT_SECONDS: String(settings.providerTimeoutSeconds),
+    SAT_SIM_AGENT_ENABLED: String(settings.agentEnabled),
+    SAT_SIM_AGENT_MODEL: settings.agentModel,
+    SAT_SIM_AGENT_SYSTEM_PROMPT: settings.agentSystemPrompt,
+    SAT_SIM_AGENT_TOOLS: JSON.stringify(settings.agentTools),
     SAT_SIM_KEEPTRACK_API_KEY: settings.keeptrackApiKey,
   };
 }
@@ -597,6 +612,10 @@ function registerIpc() {
     const connectionChanged = ["jetsonHost", "jetsonApiPort", "jetsonGtxPort", "desktopAdvertiseHost", "platformGtxResultPort"].some((key) => prior[key] !== saved[key]);
     const hostIdentityChanged = prior.jetsonHost !== saved.jetsonHost || prior.jetsonSshUsername !== saved.jetsonSshUsername;
     const keeptrackChanged = prior.keeptrackApiKey !== saved.keeptrackApiKey;
+    const agentChanged = prior.agentEnabled !== saved.agentEnabled
+      || prior.agentModel !== saved.agentModel
+      || prior.agentSystemPrompt !== saved.agentSystemPrompt
+      || JSON.stringify(prior.agentTools) !== JSON.stringify(saved.agentTools);
     if (!saved.jetsonHost || !saved.desktopAdvertiseHost) {
       throw new Error("Jetson 模式需要填写 Jetson 地址和桌面可访问的 LAN 地址");
     }
@@ -608,10 +627,16 @@ function registerIpc() {
     }
     if (connectionChanged) {
       await stopStack(); await startStack(); await loadCurrentWeb("?jetsonDeployment=1");
-    } else if (keeptrackChanged) {
-      await stopProcess("ground");
-      startService("ground", runtime.ports.ground);
-      await waitFor(`http://127.0.0.1:${runtime.ports.ground}/health`, "地面站服务");
+    } else if (keeptrackChanged || agentChanged) {
+      const services = [
+        ...(keeptrackChanged ? [{ name: "ground", label: "地面站服务" }] : []),
+        ...(agentChanged ? [{ name: "platform", label: "星务平台服务" }] : []),
+      ];
+      for (const service of services) {
+        await stopProcess(service.name);
+        startService(service.name, runtime.ports[service.name]);
+        await waitFor(`http://127.0.0.1:${runtime.ports[service.name]}/health`, service.label);
+      }
     }
     if (prior.cesiumIonToken !== saved.cesiumIonToken) await restartWeb();
     return publicSettings();

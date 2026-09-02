@@ -647,6 +647,11 @@ class PlatformState:
                                     "target_latitude": command.target_latitude,
                                     "target_longitude": command.target_longitude,
                                     "scene_id": command.scene_id,
+                                    # Agent settings remain desktop-local and are read only
+                                    # when this AI stage is executed.  The GPU receives a
+                                    # bounded, validated wire copy rather than direct access
+                                    # to desktop configuration.
+                                    "agent": self.settings.agent_configuration,
                                 },
                             }
                         ),

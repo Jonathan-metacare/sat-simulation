@@ -7,6 +7,10 @@ export type DesktopSettings = {
   keeptrackApiKey: string;
   llmModel: string;
   providerTimeoutSeconds: number;
+  agentEnabled: boolean;
+  agentModel: string;
+  agentSystemPrompt: string;
+  agentTools: Array<"mission_context" | "verified_products" | "l1b_metadata">;
   gpuMode: "jetson";
   jetsonHost: string;
   jetsonSshUsername: string;
